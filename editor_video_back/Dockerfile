@@ -1,4 +1,4 @@
-FROM rust:latest as builder
+FROM rust:1-slim-bookworm as builder
 
 WORKDIR /app
 
@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app/target/release/editor_video_back /app/editor_video_back
 
-EXPOSE 8080
+EXPOSE 8081
 
 CMD ["./editor_video_back"]
 

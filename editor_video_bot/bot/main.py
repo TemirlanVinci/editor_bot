@@ -8,9 +8,9 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import BOT_TOKEN
 from api.client import init_session, close_session
-from filters import refresh_admins
+# from filters import refresh_admins
 
-from handlers import start, admin
+from handlers import start, admin, cut
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 dp.include_router(start.router)
 dp.include_router(admin.router)
+dp.include_router(cut.router)
 
 @dp.callback_query(F.data == "noop")
 async def cb_noop(cb: CallbackQuery) -> None:
@@ -27,7 +28,7 @@ async def cb_noop(cb: CallbackQuery) -> None:
 
 async def on_startup(bot: Bot) -> None:
     await init_session()
-    await refresh_admins()
+    # await refresh_admins()
     
     # Сбрасываем вебхук на случай, если Telegram его запомнил
     await bot.delete_webhook(drop_pending_updates=True)

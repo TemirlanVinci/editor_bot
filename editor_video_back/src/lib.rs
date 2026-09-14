@@ -7,6 +7,7 @@ pub mod error;
 pub mod handlers;
 pub mod models;
 pub mod routes;
+pub mod services;
 
 pub use error::AppError;
 
@@ -18,6 +19,6 @@ pub fn create_app(pool: PgPool) -> Router {
 
     Router::new()
         .route("/health", axum::routing::get(|| async { "OK" }))
-        .merge(api_router)
+        .nest("/api/v1", api_router)
         .with_state(pool)
 }

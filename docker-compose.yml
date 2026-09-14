@@ -33,10 +33,10 @@ services:
     environment:
       # Обновил дефолтные значения
       DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD:-qwerka00}@postgres:5432/${POSTGRES_DB:-edit_pizza_db}
-      PORT: 8080
+      PORT: 8081
       BOT_SECRET: ${BOT_SECRET}
     ports:
-      - "8080:8080"
+      - "8081:8081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +54,7 @@ services:
     restart: always
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
-      BACKEND_URL: http://backend:8080
+      BACKEND_URL: http://backend:8081
       BOT_SECRET: ${BOT_SECRET}
       
     depends_on:

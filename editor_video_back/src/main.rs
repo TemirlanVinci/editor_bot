@@ -56,7 +56,7 @@ async fn main() {
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+        .unwrap_or(8081);
 
     // Используем [0, 0, 0, 0] вместо [127, 0, 0, 1] для работы в Docker
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
