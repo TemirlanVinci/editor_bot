@@ -57,12 +57,6 @@ services:
       BACKEND_URL: http://backend:8080
       BOT_SECRET: ${BOT_SECRET}
       
-      # Пока вебхуков в твоем .env нет, скрыл эти параметры для long-polling:
-      # MAIN_WEBHOOK_URL: ${MAIN_WEBHOOK_URL}
-      # WEBHOOK_SECRET: ${WEBHOOK_SECRET}
-      # WEBHOOK_PORT: ${WEBHOOK_PORT:-8081}
-    # ports:
-    #   - "${WEBHOOK_PORT:-8081}:${WEBHOOK_PORT:-8081}"
     depends_on:
       - backend
     logging:
