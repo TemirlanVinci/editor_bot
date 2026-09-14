@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: editor_db
+    restart: always
+    environment:
+      # Подставил fallback значения из твоего нового .env
+      POSTGRES_USER: ${POSTGRES_USER:-db_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qwerka00}
+      POSTGRES_DB: ${POSTGRES_DB:-edit_pizza_db}
+    ports:
+      - "5432:5432" # Поставил стандартный порт (если тебе не нужен именно 5433 на хосте)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Обновил переменные в healthcheck
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-db_admin} -d ${POSTGRES_DB:-edit_pizza_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  backend:
+    build:
+      context: ./editor_video_back # <--- НОВЫЙ ПУТЬ
+      dockerfile: Dockerfile
+    container_name: editor_backend # <--- НОВОЕ ИМЯ
+    restart: always
+    environment:
+      # Обновил дефолтные значения
+      DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD:-qwerka00}@postgres:5432/${POSTGRES_DB:-edit_pizza_db}
+      PORT: 8080
+      BOT_SECRET: ${BOT_SECRET}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  bot:
+    build:
+      context: ./editor_video_bot # <--- НОВЫЙ ПУТЬ
+      dockerfile: Dockerfile
+    container_name: editor_bot # <--- НОВОЕ ИМЯ
+    restart: always
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      BACKEND_URL: http://backend:8080
+      BOT_SECRET: ${BOT_SECRET}
+      
+      # Пока вебхуков в твоем .env нет, скрыл эти параметры для long-polling:
+      # MAIN_WEBHOOK_URL: ${MAIN_WEBHOOK_URL}
+      # WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      # WEBHOOK_PORT: ${WEBHOOK_PORT:-8081}
+    # ports:
+    #   - "${WEBHOOK_PORT:-8081}:${WEBHOOK_PORT:-8081}"
+    depends_on:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  postgres_data:
