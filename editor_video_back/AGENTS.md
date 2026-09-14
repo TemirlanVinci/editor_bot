@@ -16,8 +16,8 @@
 - `migrations/` — SQLx database migration scripts.
 - `.sqlx/` — Offline query cache for `sqlx::query!` macros (committed to git).
 - `src/main.rs` — Application entry point & state initialization.
-
-> **Constraint:** Do NOT suggest refactoring to feature-slices right now. Maintain this structure strictly.
+- `src/services/` — Business logic and external processing layer. Contains application operations that should not live directly inside HTTP handlers or the database layer. Services handle tasks such as video/audio processing, file operations, and interaction with external tools like FFmpeg. Handlers should call service functions instead of containing implementation details of these operations.
+  > **Constraint:** Do NOT suggest refactoring to feature-slices right now. Maintain this structure strictly.
 
 ---
 
