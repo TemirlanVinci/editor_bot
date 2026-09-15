@@ -40,6 +40,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./media:/app/media # <--- ОБЩАЯ ДИРЕКТОРИЯ ДЛЯ МЕДИА
     logging:
       driver: "json-file"
       options:
@@ -56,9 +58,10 @@ services:
       BOT_TOKEN: ${BOT_TOKEN}
       BACKEND_URL: http://backend:8081
       BOT_SECRET: ${BOT_SECRET}
-      
     depends_on:
       - backend
+    volumes:
+      - ./media:/app/media # <--- ТА ЖЕ САМАЯ ДИРЕКТОРИЯ ДЛЯ БОТА
     logging:
       driver: "json-file"
       options:
