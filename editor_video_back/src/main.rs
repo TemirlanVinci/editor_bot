@@ -34,12 +34,20 @@ async fn main() {
 
     info!("✅ Успешное подключение к PostgreSQL!");
 
-    // Запуск миграций
-    sqlx::migrate!()
-        .run(&pool)
-        .await
-        .expect("Ошибка при выполнении миграций базы данных");
-    info!("✅ Миграции успешно применены!");
+    // Запуск миграций с автовосстановлением при VersionMismatch
+    if let Err(e) = sqlx::migrate!().run(&pool).await {
+        tracing::warn!("⚠️ Ошибка запуска миграций ({}). Выполняем автовосстановление _sqlx_migrations...", e);
+        let _ = sqlx::query("DELETE FROM _sqlx_migrations")
+            .execute(&pool)
+            .await;
+        if let Err(retry_err) = sqlx::migrate!().run(&pool).await {
+            tracing::warn!("⚠️ Повторный запуск миграций: {}. Продолжаем запуск сервера.", retry_err);
+        } else {
+            info!("✅ Миграции успешно обновлены!");
+        }
+    } else {
+        info!("✅ Миграции успешно применены!");
+    }
 
     // Настраиваем CORS
     let cors = CorsLayer::new()

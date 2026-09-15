@@ -1,63 +1,104 @@
+use crate::error::AppError;
 use axum::{
-    extract::Multipart,
-    http::{header, StatusCode},
+    body::{Body, Bytes},
+    extract::{Multipart, State},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::io::Read;
-use tempfile::tempdir;
+use futures_util::stream::Stream;
+use sqlx::PgPool;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tempfile::{TempDir, tempdir};
 use tokio::fs::File as TokioFile;
 use tokio::io::AsyncWriteExt;
-use crate::error::AppError;
+use tokio_util::io::ReaderStream;
+use tracing::info;
 
-pub async fn cut_video(mut multipart: Multipart) -> Result<Response, AppError> {
-    let mut video_bytes = None;
-    
-    while let Some(field) = multipart
+struct CleanupStream {
+    stream: ReaderStream<TokioFile>,
+    _temp_dir: TempDir,
+}
+
+impl Stream for CleanupStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.stream).poll_next(cx)
+    }
+}
+
+pub async fn cut_video(
+    State(pool): State<PgPool>,
+    mut multipart: Multipart,
+) -> Result<Response, AppError> {
+    info!("📥 Received cut_video request");
+    let mut temp_dir = None;
+    let mut input_path = None;
+
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Validation(format!("Failed to parse multipart: {}", e)))?
     {
         if field.name() == Some("video") {
-            let bytes = field
-                .bytes()
+            let dir = tempdir()
+                .map_err(|e| AppError::Validation(format!("Failed to create temp dir: {}", e)))?;
+            let file_path = dir.path().join("input.mp4");
+
+            let mut file = TokioFile::create(&file_path).await.map_err(|e| {
+                AppError::Validation(format!("Failed to create input video file: {}", e))
+            })?;
+
+            let mut bytes_written = 0u64;
+            while let Some(chunk) = field
+                .chunk()
                 .await
-                .map_err(|e| AppError::Validation(format!("Failed to read video field: {}", e)))?;
-            video_bytes = Some(bytes);
+                .map_err(|e| AppError::Validation(format!("Failed to read video chunk: {}", e)))?
+            {
+                bytes_written += chunk.len() as u64;
+                file.write_all(&chunk).await.map_err(|e| {
+                    AppError::Validation(format!("Failed to write input video: {}", e))
+                })?;
+            }
+
+            info!(
+                "📥 Received input video upload ({} bytes saved to temporary file)",
+                bytes_written
+            );
+
+            temp_dir = Some(dir);
+            input_path = Some(file_path);
             break;
         }
     }
 
-    let bytes = video_bytes.ok_or_else(|| AppError::Validation("Missing 'video' field".to_string()))?;
-
-    // Create a temporary directory that will be deleted when dropped
-    let temp_dir = tempdir().map_err(|e| AppError::Validation(format!("Failed to create temp dir: {}", e)))?;
-    let input_path = temp_dir.path().join("input.mp4");
-
-    let mut file = TokioFile::create(&input_path)
-        .await
-        .map_err(|e| AppError::Validation(format!("Failed to create input video file: {}", e)))?;
-    
-    file.write_all(&bytes)
-        .await
-        .map_err(|e| AppError::Validation(format!("Failed to write input video: {}", e)))?;
+    let temp_dir =
+        temp_dir.ok_or_else(|| AppError::Validation("Missing 'video' field".to_string()))?;
+    let input_path =
+        input_path.ok_or_else(|| AppError::Validation("Missing 'video' field".to_string()))?;
 
     // Process the video using FFmpeg and create a zip file
-    let zip_path = crate::services::video::cut::process_video(&input_path, temp_dir.path()).await?;
+    let zip_path = crate::services::video::cut::process_video(&input_path, temp_dir.path(), &pool).await?;
 
-    // Read the zip file into memory before dropping the temporary directory
-    let mut zip_file = std::fs::File::open(&zip_path)
+    let zip_file = TokioFile::open(&zip_path)
+        .await
         .map_err(|e| AppError::Validation(format!("Failed to open generated zip file: {}", e)))?;
-    
-    let mut zip_data = Vec::new();
-    zip_file.read_to_end(&mut zip_data)
-        .map_err(|e| AppError::Validation(format!("Failed to read generated zip file: {}", e)))?;
 
-    // Drop temp_dir to explicitly clean up temporary files (input and fragments)
-    drop(temp_dir);
+    info!("📤 Streaming ZIP archive response to client...");
+
+    let reader_stream = ReaderStream::new(zip_file);
+    let cleanup_stream = CleanupStream {
+        stream: reader_stream,
+        _temp_dir: temp_dir,
+    };
+
+    let body = Body::from_stream(cleanup_stream);
 
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/zip")],
-        zip_data,
-    ).into_response())
+        body,
+    )
+        .into_response())
 }

@@ -5,7 +5,8 @@ _session: aiohttp.ClientSession | None = None
 
 async def init_session():
     global _session
-    _session = aiohttp.ClientSession()
+    timeout = aiohttp.ClientTimeout(total=1800, connect=60)
+    _session = aiohttp.ClientSession(timeout=timeout)
 
 async def close_session():
     global _session
@@ -18,6 +19,10 @@ async def cut_video(video_path: str, output_zip_path: str):
     Sends video to Rust backend for cutting and saves the ZIP result.
     Raises Exception if backend response is not 200.
     """
+    global _session
+    if _session is None:
+        await init_session()
+
     url = f"{API_BASE.rstrip('/')}/api/v1/video/cut"
     headers = {"X-Bot-Secret": BOT_SECRET}
     

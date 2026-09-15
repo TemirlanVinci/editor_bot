@@ -1,4 +1,4 @@
-use axum::{extract::DefaultBodyLimit, routing::post, Router};
+use axum::{Router, extract::DefaultBodyLimit, routing::post};
 use sqlx::PgPool;
 
 pub fn build_router() -> Router<PgPool> {

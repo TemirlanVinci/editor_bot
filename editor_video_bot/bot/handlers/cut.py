@@ -24,14 +24,28 @@ async def cmd_cut(message: Message, state: FSMContext):
     await message.answer("Отправь видео, которое нужно разделить на фрагменты.")
     await state.set_state(CutStates.waiting_for_video)
 
-@router.message(CutStates.waiting_for_video, F.video)
+@router.message(CutStates.waiting_for_video, F.video | F.document)
+@router.message(F.video | F.document)
 async def handle_video(message: Message, state: FSMContext, bot: Bot):
-    await state.clear()
-    
-    video = message.video
-    if not video:
+    video_obj = None
+    if message.video:
+        video_obj = message.video
+    elif message.document:
+        mime = message.document.mime_type or ""
+        fname = message.document.file_name or ""
+        if mime.startswith("video/") or fname.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v')):
+            video_obj = message.document
+        else:
+            if await state.get_state() == CutStates.waiting_for_video:
+                await state.clear()
+                await message.answer("Этот документ не является видео. Операция отменена. Отправь /cut чтобы попробовать снова.")
+            return
+
+    if not video_obj:
         return
 
+    await state.clear()
+    
     msg = await message.answer("Видео получено. Скачиваем...")
 
     temp_dir = tempfile.mkdtemp()
@@ -42,7 +56,7 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
     try:
         # 1. Download video
         try:
-            await bot.download(video, destination=video_path)
+            await bot.download(video_obj, destination=video_path)
         except Exception as e:
             logger.error(f"Failed to download video from Telegram: {e}")
             await msg.edit_text("Ошибка при скачивании видео из Telegram.")
@@ -52,8 +66,6 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
 
         # 2. Send to backend
         try:
-            # You can wrap this in asyncio.wait_for if you need strict timeout, 
-            # though aiohttp ClientSession can have its own timeout.
             await cut_video(video_path, zip_path)
         except asyncio.TimeoutError:
             logger.error("Backend request timed out.")
@@ -101,4 +113,5 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
 @router.message(CutStates.waiting_for_video)
 async def handle_not_video(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Это не видео. Операция отменена. Отправь /cut чтобы попробовать снова.")
+    await message.answer("Это не видео. Операция отменена. Отправь /cut или пришли видеофайл.")
+
