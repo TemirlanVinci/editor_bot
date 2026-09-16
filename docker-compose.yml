@@ -4,16 +4,14 @@ services:
     container_name: editor_db
     restart: always
     environment:
-      # Подставил fallback значения из твоего нового .env
       POSTGRES_USER: ${POSTGRES_USER:-db_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qwerka00}
       POSTGRES_DB: ${POSTGRES_DB:-edit_pizza_db}
     ports:
-      - "5432:5432" # Поставил стандартный порт (если тебе не нужен именно 5433 на хосте)
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # Обновил переменные в healthcheck
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-db_admin} -d ${POSTGRES_DB:-edit_pizza_db}"]
       interval: 5s
       timeout: 5s
@@ -26,22 +24,22 @@ services:
 
   backend:
     build:
-      context: ./editor_video_back # <--- НОВЫЙ ПУТЬ
+      context: ./editor_video_back
       dockerfile: Dockerfile
-    container_name: editor_backend # <--- НОВОЕ ИМЯ
+    container_name: editor_backend
     restart: always
     environment:
-      # Обновил дефолтные значения
       DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD:-qwerka00}@postgres:5432/${POSTGRES_DB:-edit_pizza_db}
       PORT: 8081
       BOT_SECRET: ${BOT_SECRET}
+      MEDIA_DIR: /app/media
     ports:
       - "8081:8081"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - ./media:/app/media # <--- ОБЩАЯ ДИРЕКТОРИЯ ДЛЯ МЕДИА
+      - ./media:/app/media
     logging:
       driver: "json-file"
       options:
@@ -50,9 +48,9 @@ services:
 
   bot:
     build:
-      context: ./editor_video_bot # <--- НОВЫЙ ПУТЬ
+      context: ./editor_video_bot
       dockerfile: Dockerfile
-    container_name: editor_bot # <--- НОВОЕ ИМЯ
+    container_name: editor_bot
     restart: always
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
@@ -61,7 +59,7 @@ services:
     depends_on:
       - backend
     volumes:
-      - ./media:/app/media # <--- ТА ЖЕ САМАЯ ДИРЕКТОРИЯ ДЛЯ БОТА
+      - ./media:/app/media
     logging:
       driver: "json-file"
       options:

@@ -1,9 +1,10 @@
 use crate::error::AppError;
+use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 pub async fn create_zip(files: Vec<PathBuf>, output_zip_path: PathBuf) -> Result<(), AppError> {
     tokio::task::spawn_blocking(move || {
@@ -49,29 +50,47 @@ pub async fn create_zip(files: Vec<PathBuf>, output_zip_path: PathBuf) -> Result
     Ok(())
 }
 
+/// Директория с фоновыми музыкальными треками.
+/// По умолчанию — подпапка "music" внутри общей media-директории.
+/// Переопределяется через переменные окружения MUSIC_DIR или MEDIA_DIR.
+fn music_dir() -> PathBuf {
+    if let Ok(dir) = env::var("MUSIC_DIR") {
+        return PathBuf::from(dir);
+    }
+
+    let media_dir = env::var("MEDIA_DIR").unwrap_or_else(|_| "media".to_string());
+    Path::new(&media_dir).join("music")
+}
+
 pub async fn process_video(
     input_path: &Path,
     temp_dir: &Path,
     pool: &sqlx::PgPool,
 ) -> Result<PathBuf, AppError> {
-    tracing::info!("⚙️ [Step 1/4] Extracting and splitting audio fragments...");
+    tracing::info!("⚙️ [Step 1/5] Extracting and splitting audio fragments...");
     let audio_paths =
         crate::services::video::audio::extract_and_split_audio(input_path, temp_dir).await?;
 
-    tracing::info!("⚙️ [Step 2/4] Fetching random background video path from database...");
+    tracing::info!("⚙️ [Step 2/5] Fetching random background video path from database...");
     let bg_path_str = crate::db::get_random_background(pool).await?;
     let background_path = PathBuf::from(bg_path_str);
 
-    tracing::info!("⚙️ [Step 3/4] Rendering video fragments with anti-fraud mutations...");
-    let video_paths =
-        crate::services::video::render::render_fragments(audio_paths, &background_path, temp_dir)
-            .await?;
+    tracing::info!("⚙️ [Step 3/5] Picking random background music track...");
+    let music_path = crate::services::video::music::get_random_music(&music_dir()).await?;
 
-    tracing::info!("⚙️ [Step 4/4] Archiving final video fragments into ZIP file...");
+    tracing::info!("⚙️ [Step 4/5] Rendering video fragments with anti-fraud mutations...");
+    let video_paths = crate::services::video::render::render_fragments(
+        audio_paths,
+        &background_path,
+        &music_path,
+        temp_dir,
+    )
+    .await?;
+
+    tracing::info!("⚙️ [Step 5/5] Archiving final video fragments into ZIP file...");
     let zip_path = temp_dir.join("fragments.zip");
     create_zip(video_paths, zip_path.clone()).await?;
 
     tracing::info!("✅ Process complete! Returning ZIP archive: {:?}", zip_path);
     Ok(zip_path)
 }
-

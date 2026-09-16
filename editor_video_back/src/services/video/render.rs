@@ -10,18 +10,22 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::info;
 
+/// Громкость фоновой музыки относительно голоса (0.0 - 1.0).
+/// 0.12-0.18 — музыка слышна, но не перебивает голос.
+const MUSIC_VOLUME: f64 = 0.15;
+
 pub async fn render_fragments(
     audio_paths: Vec<PathBuf>,
     background_path: &Path,
+    music_path: &Path,
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>, AppError> {
     let total_fragments = audio_paths.len();
     info!(
-        "🎬 Starting parallel rendering for {} fragment(s) with background {:?}",
-        total_fragments, background_path
+        "🎬 Starting parallel rendering for {} fragment(s) with background {:?} and music {:?}",
+        total_fragments, background_path, music_path
     );
 
-    // Limit concurrency to avoid CPU starvation (max available parallelism or 2)
     let max_concurrency = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2)
@@ -35,6 +39,7 @@ pub async fn render_fragments(
         let output_filename = format!("fragment_{}_final.mp4", fragment_index);
         let output_path = output_dir.join(output_filename);
         let bg_path = background_path.to_path_buf();
+        let music_p = music_path.to_path_buf();
         let sem = semaphore.clone();
 
         let task = tokio::spawn(async move {
@@ -49,7 +54,8 @@ pub async fn render_fragments(
             let start_time = std::time::Instant::now();
 
             let audio_dur = crate::services::video::audio::get_video_duration(&audio_path).await?;
-            let target_duration = audio_dur / 1.03;
+            // Изменение 1: Длительность под 1.08x (8% ускорения)
+            let target_duration = audio_dur / 1.08;
 
             let output = Command::new("ffmpeg")
                 .stdin(Stdio::null())
@@ -59,7 +65,8 @@ pub async fn render_fragments(
                 .arg(&audio_path)
                 .args([
                     "-filter_complex",
-                    "[0:v]setpts=0.97*PTS[v];[1:a]atempo=1.03[a]",
+                    // Изменение 2 и 3: setpts = 1 / 1.08 (0.925926), atempo = 1.08
+                    "[0:v]setpts=0.925926*PTS[v];[1:a]atempo=1.08[a]",
                     "-map",
                     "[v]",
                     "-map",
@@ -160,7 +167,8 @@ mod tests {
     async fn test_render_fragments_empty() {
         let temp = tempdir().expect("Failed to create temp dir");
         let bg_path = temp.path().join("bg.mp4");
-        let result = render_fragments(vec![], &bg_path, temp.path()).await;
+        let music_path = temp.path().join("music.mp3");
+        let result = render_fragments(vec![], &bg_path, &music_path, temp.path()).await;
         assert!(result.is_ok());
         assert!(result.expect("Expected Ok").is_empty());
     }
