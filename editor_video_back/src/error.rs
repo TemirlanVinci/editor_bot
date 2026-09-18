@@ -10,6 +10,7 @@ pub enum AppError {
     Validation(String),
     Database(sqlx::Error),
     Unauthorized,
+    Internal(String),
 }
 
 impl IntoResponse for AppError {
@@ -20,6 +21,13 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             AppError::Database(err) => {
                 error!(error = %err, "database error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
+            AppError::Internal(msg) => {
+                error!(error = %msg, "internal processing error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal server error".to_string(),
@@ -50,6 +58,7 @@ impl std::fmt::Display for AppError {
             AppError::Validation(msg) => write!(f, "validation error: {msg}"),
             AppError::Database(err) => write!(f, "database error: {err}"),
             AppError::Unauthorized => write!(f, "unauthorized"),
+            AppError::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
 }

@@ -86,6 +86,53 @@ pub async fn get_video_duration(input_path: &Path) -> Result<f64, AppError> {
     Ok(duration)
 }
 
+/// Возвращает (width, height) первого видеопотока файла. Используется, чтобы
+/// сгенерировать субтитры с PlayResX/PlayResY, совпадающим с реальным кадром
+/// (иначе караоке-текст может уехать при несовпадении соотношения сторон).
+pub async fn get_video_dimensions(input_path: &Path) -> Result<(u32, u32), AppError> {
+    let output = Command::new("ffprobe")
+        .stdin(Stdio::null())
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+        ])
+        .arg(input_path)
+        .output()
+        .await
+        .map_err(|e| AppError::Validation(format!("Failed to execute ffprobe: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("ffprobe error: {}", stderr);
+        return Err(AppError::Validation(
+            "Failed to determine video dimensions".to_string(),
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let dims: Vec<&str> = stdout.trim().split('x').collect();
+    if dims.len() != 2 {
+        return Err(AppError::Validation(
+            "Failed to parse video dimensions".to_string(),
+        ));
+    }
+
+    let width: u32 = dims[0]
+        .parse()
+        .map_err(|_| AppError::Validation("Failed to parse video width".to_string()))?;
+    let height: u32 = dims[1]
+        .parse()
+        .map_err(|_| AppError::Validation("Failed to parse video height".to_string()))?;
+
+    Ok((width, height))
+}
+
 pub async fn extract_and_split_audio(
     input_video_path: &Path,
     output_dir: &Path,
@@ -119,7 +166,7 @@ pub async fn extract_and_split_audio(
                     &interval.end.to_string(),
                     "-vn",
                     "-c:a",
-                    "copy",
+                    "aac",
                 ])
                 .arg(&output_path)
                 .stdout(Stdio::null())
@@ -186,9 +233,7 @@ pub async fn extract_and_split_audio(
         )));
     }
 
-    tracing::info!(
-        "🎵 Audio extraction complete. Cleaned up original video file."
-    );
+    tracing::info!("🎵 Audio extraction complete. Cleaned up original video file.");
 
     Ok(generated_files)
 }

@@ -1,1 +1,1 @@
-// Models module
+pub mod video;

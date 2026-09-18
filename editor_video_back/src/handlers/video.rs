@@ -1,5 +1,7 @@
 use crate::error::AppError;
+use crate::models::video::DownloadVideoRequest;
 use axum::{
+    Json,
     body::{Body, Bytes},
     extract::{Multipart, State},
     http::{StatusCode, header},
@@ -14,6 +16,7 @@ use tokio::fs::File as TokioFile;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use tracing::info;
+use validator::Validate;
 
 struct CleanupStream {
     stream: ReaderStream<TokioFile>,
@@ -79,7 +82,8 @@ pub async fn cut_video(
         input_path.ok_or_else(|| AppError::Validation("Missing 'video' field".to_string()))?;
 
     // Process the video using FFmpeg and create a zip file
-    let zip_path = crate::services::video::cut::process_video(&input_path, temp_dir.path(), &pool).await?;
+    let zip_path =
+        crate::services::video::cut::process_video(&input_path, temp_dir.path(), &pool).await?;
 
     let zip_file = TokioFile::open(&zip_path)
         .await
@@ -101,4 +105,34 @@ pub async fn cut_video(
         body,
     )
         .into_response())
+}
+
+pub async fn download_video(
+    Json(payload): Json<DownloadVideoRequest>,
+) -> Result<Response, AppError> {
+    info!(url = %payload.url, "📥 Received download_video request");
+    payload.validate()?;
+
+    let temp_dir = tempdir()
+        .map_err(|e| AppError::Internal(format!("Failed to create temporary directory: {}", e)))?;
+
+    let downloaded_file_path =
+        crate::services::video::download::download_youtube_video(&payload.url, temp_dir.path())
+            .await?;
+
+    let video_file = TokioFile::open(&downloaded_file_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to open downloaded video file: {}", e)))?;
+
+    info!("📤 Streaming MP4 video response to client...");
+
+    let reader_stream = ReaderStream::new(video_file);
+    let cleanup_stream = CleanupStream {
+        stream: reader_stream,
+        _temp_dir: temp_dir,
+    };
+
+    let body = Body::from_stream(cleanup_stream);
+
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, "video/mp4")], body).into_response())
 }

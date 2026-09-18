@@ -6,13 +6,13 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-db_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qwerka00}
-      POSTGRES_DB: ${POSTGRES_DB:-edit_pizza_db}
+      POSTGRES_DB: ${POSTGRES_DB:-editor_video_db}
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-db_admin} -d ${POSTGRES_DB:-edit_pizza_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-db_admin} -d ${POSTGRES_DB:-editor_video_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -26,13 +26,18 @@ services:
     build:
       context: ./editor_video_back
       dockerfile: Dockerfile
+      args:
+        # small (~466MB, дефолт) / base (~142MB, быстрее) / medium (~1.5GB, точнее)
+        WHISPER_MODEL: ${WHISPER_MODEL:-small}
     container_name: editor_backend
     restart: always
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD:-qwerka00}@postgres:5432/${POSTGRES_DB:-edit_pizza_db}
+      DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD:-qwerka00}@postgres:5432/${POSTGRES_DB:-editor_video_db}
       PORT: 8081
       BOT_SECRET: ${BOT_SECRET}
       MEDIA_DIR: /app/media
+      WHISPER_MODEL_PATH: /app/models/ggml-${WHISPER_MODEL:-small}.bin
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
     ports:
       - "8081:8081"
     depends_on:

@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -15,6 +16,10 @@ from api.client import cut_video
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+def extract_number(filename: str) -> int:
+    match = re.search(r'\d+', filename)
+    return int(match.group()) if match else 0
 
 class CutStates(StatesGroup):
     waiting_for_video = State()
@@ -89,7 +94,7 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
         # 4. Send fragments
         try:
             files = [f for f in os.listdir(extract_dir) if os.path.isfile(os.path.join(extract_dir, f))]
-            files.sort()
+            files.sort(key=extract_number)
             
             if not files:
                 await msg.edit_text("Сервер вернул пустой архив без фрагментов.")
@@ -97,10 +102,11 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
 
             await msg.edit_text("Видео разделено. Отправляю фрагменты...")
             
-            for file_name in files:
+            for i, file_name in enumerate(files, 1):
+                part_num = extract_number(file_name) or i
                 fragment_path = os.path.join(extract_dir, file_name)
                 input_file = FSInputFile(fragment_path)
-                await message.answer_video(input_file)
+                await message.answer_video(input_file, caption=str(part_num))
                 
             await msg.delete()
         except Exception as e:

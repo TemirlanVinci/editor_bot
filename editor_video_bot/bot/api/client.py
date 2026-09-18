@@ -38,3 +38,28 @@ async def cut_video(video_path: str, output_zip_path: str):
             with open(output_zip_path, 'wb') as out_f:
                 async for chunk in response.content.iter_chunked(8192):
                     out_f.write(chunk)
+
+
+async def download_video(youtube_url: str) -> bytes:
+    """
+    Issues POST /api/v1/video/download to backend and returns video content bytes.
+    Raises Exception if backend response is not 200.
+    """
+    global _session
+    if _session is None:
+        await init_session()
+
+    url = f"{API_BASE.rstrip('/')}/api/v1/video/download"
+    headers = {
+        "X-Bot-Secret": BOT_SECRET,
+        "Content-Type": "application/json",
+    }
+    payload = {"url": youtube_url}
+
+    async with _session.post(url, json=payload, headers=headers) as response:
+        if response.status != 200:
+            text = await response.text()
+            raise Exception(f"Backend returned {response.status}: {text}")
+
+        return await response.read()
+

@@ -30,10 +30,10 @@ pub async fn get_random_music(music_dir: &Path) -> Result<PathBuf, AppError> {
         }
 
         let path = entry.path();
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if MUSIC_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
-                candidates.push(path);
-            }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && MUSIC_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+        {
+            candidates.push(path);
         }
     }
 

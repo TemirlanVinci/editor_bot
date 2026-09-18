@@ -10,17 +10,18 @@ from config import BOT_TOKEN
 from api.client import init_session, close_session
 # from filters import refresh_admins
 
-from handlers import start, admin, cut
+from handlers import admin, cut, download, start
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher(storage=MemoryStorage()) 
+dp = Dispatcher(storage=MemoryStorage())
 
 dp.include_router(start.router)
 dp.include_router(admin.router)
 dp.include_router(cut.router)
+dp.include_router(download.router)
 
 @dp.callback_query(F.data == "noop")
 async def cb_noop(cb: CallbackQuery) -> None:

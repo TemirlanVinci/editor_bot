@@ -36,12 +36,18 @@ async fn main() {
 
     // Запуск миграций с автовосстановлением при VersionMismatch
     if let Err(e) = sqlx::migrate!().run(&pool).await {
-        tracing::warn!("⚠️ Ошибка запуска миграций ({}). Выполняем автовосстановление _sqlx_migrations...", e);
+        tracing::warn!(
+            "⚠️ Ошибка запуска миграций ({}). Выполняем автовосстановление _sqlx_migrations...",
+            e
+        );
         let _ = sqlx::query("DELETE FROM _sqlx_migrations")
             .execute(&pool)
             .await;
         if let Err(retry_err) = sqlx::migrate!().run(&pool).await {
-            tracing::warn!("⚠️ Повторный запуск миграций: {}. Продолжаем запуск сервера.", retry_err);
+            tracing::warn!(
+                "⚠️ Повторный запуск миграций: {}. Продолжаем запуск сервера.",
+                retry_err
+            );
         } else {
             info!("✅ Миграции успешно обновлены!");
         }
