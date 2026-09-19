@@ -7,5 +7,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_BASE = os.getenv("BACKEND_URL", os.getenv("API_BASE", "http://localhost:8081"))
 BOT_SECRET = os.getenv("BOT_SECRET")
 
-# Убрали PRODUCTS_LIMIT = 5
+# Storage / Media Directory for Scheduled Media Files
+MEDIA_DIR = os.getenv("MEDIA_DIR", "/app/media")
+STORAGE_DIR = MEDIA_DIR
 
+# Worker polling interval in seconds
+WORKER_POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "60"))

@@ -1,4 +1,9 @@
-use axum::{Router, extract::DefaultBodyLimit, routing::post};
+use axum::{
+    Router,
+    extract::DefaultBodyLimit,
+    routing::{get, post},
+};
+
 use sqlx::PgPool;
 
 pub fn build_router() -> Router<PgPool> {
@@ -7,6 +12,28 @@ pub fn build_router() -> Router<PgPool> {
         .route(
             "/video/download",
             post(crate::handlers::video::download_video),
+        )
+        .route(
+            "/accounts",
+            get(crate::handlers::tiktok::get_accounts)
+                .post(crate::handlers::tiktok::create_account),
+        )
+        .route(
+            "/accounts/{id}",
+            get(crate::handlers::tiktok::get_account_by_id)
+                .delete(crate::handlers::tiktok::delete_account),
+        )
+        .route(
+            "/queue/schedule",
+            post(crate::handlers::tiktok::schedule_clips),
+        )
+        .route(
+            "/queue/claim_due",
+            post(crate::handlers::tiktok::claim_due_task),
+        )
+        .route(
+            "/queue/update_status",
+            post(crate::handlers::tiktok::update_task_status),
         )
         .layer(DefaultBodyLimit::disable())
 }

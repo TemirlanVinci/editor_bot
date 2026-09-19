@@ -1,4 +1,7 @@
+pub mod tiktok;
+
 use crate::error::AppError;
+
 use rand::seq::SliceRandom;
 use sqlx::PgPool;
 use std::env;
@@ -39,21 +42,21 @@ async fn scan_background_files_from_disk() -> Vec<String> {
     let mut found_files = Vec::new();
 
     for dir in &candidate_dirs {
-        if dir.exists() && dir.is_dir() {
-            if let Ok(mut read_dir) = tokio::fs::read_dir(dir).await {
-                while let Ok(Some(entry)) = read_dir.next_entry().await {
-                    let path = entry.path();
-                    if path.is_file()
-                        && let Some(ext) = path.extension().and_then(|e| e.to_str())
+        if dir.exists()
+            && dir.is_dir()
+            && let Ok(mut read_dir) = tokio::fs::read_dir(dir).await
+        {
+            while let Ok(Some(entry)) = read_dir.next_entry().await {
+                let path = entry.path();
+                if path.is_file()
+                    && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                {
+                    let ext_lower = ext.to_lowercase();
+                    if matches!(ext_lower.as_str(), "mp4" | "mov" | "mkv" | "avi" | "webm")
+                        && let Some(path_str) = path.to_str()
+                        && !found_files.contains(&path_str.to_string())
                     {
-                        let ext_lower = ext.to_lowercase();
-                        if matches!(ext_lower.as_str(), "mp4" | "mov" | "mkv" | "avi" | "webm")
-                            && let Some(path_str) = path.to_str()
-                        {
-                            if !found_files.contains(&path_str.to_string()) {
-                                found_files.push(path_str.to_string());
-                            }
-                        }
+                        found_files.push(path_str.to_string());
                     }
                 }
             }
@@ -84,10 +87,9 @@ pub async fn get_random_background(pool: &PgPool) -> Result<String, AppError> {
     }
 
     // Удаляем из БД записи о файлах, которых больше нет на диске
-    if let Ok(db_paths) =
-        sqlx::query_scalar::<_, String>("SELECT file_path FROM background_videos")
-            .fetch_all(pool)
-            .await
+    if let Ok(db_paths) = sqlx::query_scalar::<_, String>("SELECT file_path FROM background_videos")
+        .fetch_all(pool)
+        .await
     {
         for path in db_paths {
             if !Path::new(&path).exists() {
@@ -121,7 +123,10 @@ pub async fn get_random_background(pool: &PgPool) -> Result<String, AppError> {
     if !disk_files.is_empty() {
         let mut rng = rand::thread_rng();
         if let Some(selected) = disk_files.choose(&mut rng) {
-            info!("Selected background video from disk scan fallback: {}", selected);
+            info!(
+                "Selected background video from disk scan fallback: {}",
+                selected
+            );
             return Ok(selected.clone());
         }
     }
@@ -138,10 +143,12 @@ mod tests {
     #[test]
     fn test_get_background_candidate_dirs_includes_background_and_backgrounds() {
         let dirs = get_background_candidate_dirs();
-        let dirs_str: Vec<String> = dirs.iter().map(|d| d.to_string_lossy().to_string()).collect();
+        let dirs_str: Vec<String> = dirs
+            .iter()
+            .map(|d| d.to_string_lossy().to_string())
+            .collect();
 
         assert!(dirs_str.iter().any(|d| d.contains("background")));
         assert!(dirs_str.iter().any(|d| d.contains("backgrounds")));
     }
 }
-
