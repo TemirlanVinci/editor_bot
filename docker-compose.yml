@@ -62,6 +62,8 @@ services:
       BACKEND_URL: http://backend:8081
       BOT_SECRET: ${BOT_SECRET}
       MEDIA_DIR: /app/media
+      TELEGRAM_LOCAL_SERVER: ${TELEGRAM_LOCAL_SERVER:-}
+
 
     depends_on:
       - backend

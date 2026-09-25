@@ -71,9 +71,19 @@ pub async fn process_video(
     let audio_paths =
         crate::services::video::audio::extract_and_split_audio(input_path, temp_dir).await?;
 
-    tracing::info!("⚙️ [Step 2/5] Fetching random background video path from database...");
-    let bg_path_str = crate::db::get_random_background(pool).await?;
-    let background_path = PathBuf::from(bg_path_str);
+    // Вычисляем общую необходимую длительность фонового видео для всех фрагментов
+    let mut total_required_duration: f64 = 0.0;
+    for audio_path in &audio_paths {
+        let dur = crate::services::video::audio::get_video_duration(audio_path).await?;
+        total_required_duration += dur / crate::services::video::render::SPEED_FACTOR;
+    }
+
+    tracing::info!(
+        "⚙️ [Step 2/5] Preparing random background video sequence (required duration: {:.2}s)...",
+        total_required_duration
+    );
+    let background_path =
+        crate::db::prepare_background_sequence(pool, total_required_duration, temp_dir).await?;
 
     tracing::info!("⚙️ [Step 3/5] Picking random background music track...");
     let music_path = crate::services::video::music::get_random_music(&music_dir()).await?;

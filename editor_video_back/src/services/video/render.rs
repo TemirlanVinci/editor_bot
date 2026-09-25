@@ -21,6 +21,78 @@ pub const MUSIC_VOLUME: f64 = 0.22;
 /// с озвучкой — см. subtitles::build_karaoke_ass.
 pub const SPEED_FACTOR: f64 = 1.08;
 
+/// Склеивает список фоновых видеофайлов в один видеофайл без звука,
+/// приводя их к единому разрешению первого видео и 30 fps.
+pub async fn concat_background_videos(
+    files: &[PathBuf],
+    output_path: &Path,
+) -> Result<(), AppError> {
+    if files.is_empty() {
+        return Err(AppError::Validation(
+            "No background files to concat".to_string(),
+        ));
+    }
+
+    info!("🔗 Concatenating {} background video(s)...", files.len());
+
+    let (target_w, target_h) = audio::get_video_dimensions(&files[0]).await?;
+
+    let mut filter_complex = String::new();
+    let mut concat_inputs = String::new();
+
+    for (i, _file) in files.iter().enumerate() {
+        filter_complex.push_str(&format!(
+            "[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps=30[v{i}];",
+            i = i,
+            w = target_w,
+            h = target_h
+        ));
+        concat_inputs.push_str(&format!("[v{}]", i));
+    }
+
+    filter_complex.push_str(&format!(
+        "{}concat=n={}:v=1:a=0[outv]",
+        concat_inputs,
+        files.len()
+    ));
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.stdin(Stdio::null()).args(["-nostdin", "-y"]);
+
+    for file in files {
+        cmd.arg("-i").arg(file);
+    }
+
+    cmd.args(["-filter_complex", &filter_complex])
+        .args([
+            "-map",
+            "[outv]",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "superfast",
+        ])
+        .arg(output_path);
+
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| AppError::Validation(format!("Failed to execute ffmpeg concat: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("FFmpeg concat error: {}", stderr);
+        return Err(AppError::Validation(format!(
+            "FFmpeg concat failed: {}",
+            stderr
+        )));
+    }
+
+    info!("✅ Background concatenation completed: {:?}", output_path);
+    Ok(())
+}
+
 pub async fn render_fragments(
     audio_paths: Vec<PathBuf>,
     background_path: &Path,
@@ -35,6 +107,16 @@ pub async fn render_fragments(
 
     if total_fragments == 0 {
         return Ok(Vec::new());
+    }
+
+    // Предварительно вычисляем временные смещения фонового видео для каждого фрагмента
+    let mut start_offsets = Vec::with_capacity(total_fragments);
+    let mut current_offset = 0.0;
+    for audio_path in &audio_paths {
+        start_offsets.push(current_offset);
+        let audio_dur = audio::get_video_duration(audio_path).await?;
+        let target_duration = audio_dur / SPEED_FACTOR;
+        current_offset += target_duration;
     }
 
     // Модель Whisper грузится один раз на процесс (см. subtitles::get_context)
@@ -57,6 +139,7 @@ pub async fn render_fragments(
 
     for (index, audio_path) in audio_paths.into_iter().enumerate() {
         let fragment_index = index + 1;
+        let bg_start_time = start_offsets[index];
         let output_filename = format!("fragment_{}_final.mp4", fragment_index);
         let output_path = output_dir.join(output_filename);
         let ass_path = output_dir.join(format!("fragment_{}_subs.ass", fragment_index));
@@ -72,8 +155,8 @@ pub async fn render_fragments(
             })?;
 
             info!(
-                "🚀 Rendering fragment {}/{}...",
-                fragment_index, total_fragments
+                "🚀 Rendering fragment {}/{} (bg start: {:.2}s)...",
+                fragment_index, total_fragments, bg_start_time
             );
             let start_time = std::time::Instant::now();
 
@@ -116,7 +199,15 @@ pub async fn render_fragments(
 
             let output = Command::new("ffmpeg")
                 .stdin(Stdio::null())
-                .args(["-nostdin", "-y", "-stream_loop", "-1", "-i"])
+                .args([
+                    "-nostdin",
+                    "-y",
+                    "-ss",
+                    &format!("{:.3}", bg_start_time),
+                    "-stream_loop",
+                    "-1",
+                    "-i",
+                ])
                 .arg(&bg_path)
                 .arg("-i")
                 .arg(&audio_path)
@@ -233,5 +324,13 @@ mod tests {
         let result = render_fragments(vec![], &bg_path, &music_path, temp.path()).await;
         assert!(result.is_ok());
         assert!(result.expect("Expected Ok").is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_concat_background_videos_empty() {
+        let temp = tempdir().expect("Failed to create temp dir");
+        let output = temp.path().join("out.mp4");
+        let res = concat_background_videos(&[], &output).await;
+        assert!(res.is_err());
     }
 }

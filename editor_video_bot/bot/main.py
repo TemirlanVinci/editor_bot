@@ -6,8 +6,10 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import CallbackQuery
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.telegram import TelegramAPIServer
+from aiogram.client.session.aiohttp import AiohttpSession
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, TELEGRAM_LOCAL_SERVER
 from api.client import init_session, close_session
 from handlers import admin, cut, download, start, acc, accounts
 from worker import start_worker_loop
@@ -15,7 +17,13 @@ from worker import start_worker_loop
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+if TELEGRAM_LOCAL_SERVER:
+    logger.info(f"Используется локальный сервер Telegram Bot API: {TELEGRAM_LOCAL_SERVER}")
+    session = AiohttpSession(api=TelegramAPIServer.from_base(TELEGRAM_LOCAL_SERVER, is_local=True))
+    bot = Bot(token=BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode="HTML"))
+else:
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+
 dp = Dispatcher(storage=MemoryStorage())
 
 dp.include_router(start.router)

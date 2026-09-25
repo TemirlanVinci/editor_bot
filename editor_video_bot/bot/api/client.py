@@ -71,6 +71,28 @@ async def download_video(youtube_url: str) -> bytes:
         return await response.read()
 
 
+async def download_video_to_file(youtube_url: str, output_path: str) -> None:
+    """Issues POST /api/v1/video/download to backend and streams video directly to output_path."""
+    global _session
+    if _session is None:
+        await init_session()
+
+    url = f"{API_BASE.rstrip('/')}/api/v1/video/download"
+    headers = _get_headers()
+    headers["Content-Type"] = "application/json"
+    payload = {"url": youtube_url}
+
+    async with _session.post(url, json=payload, headers=headers) as response:
+        if response.status != 200:
+            text = await response.text()
+            raise Exception(f"Backend returned {response.status}: {text}")
+
+        with open(output_path, "wb") as out_f:
+            async for chunk in response.content.iter_chunked(8192):
+                out_f.write(chunk)
+
+
+
 async def get_active_accounts() -> List[Dict[str, Any]]:
     """Retrieves list of active accounts from backend."""
     global _session

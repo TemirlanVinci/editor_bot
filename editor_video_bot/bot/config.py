@@ -13,3 +13,7 @@ STORAGE_DIR = MEDIA_DIR
 
 # Worker polling interval in seconds
 WORKER_POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "60"))
+
+# Telegram Bot API Server URL (leave empty for standard Telegram API, or set e.g. http://telegram-bot-api:8081 for local server)
+TELEGRAM_LOCAL_SERVER = os.getenv("TELEGRAM_LOCAL_SERVER", "").strip()
+
