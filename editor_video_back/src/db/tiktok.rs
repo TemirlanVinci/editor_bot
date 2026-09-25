@@ -264,7 +264,15 @@ pub async fn schedule_clips(
                 AppError::Internal(format!("Failed to move file to {:?}: {}", dest_path, e))
             })?;
 
-        let caption = format!("Part {}/{} | #fyp #viral", idx + 1, total_clips);
+        let random_tags = super::hashtags::get_random_hashtags(pool, 5)
+            .await
+            .unwrap_or_default();
+        let tags_str = if random_tags.is_empty() {
+            "#fyp #viral".to_string()
+        } else {
+            random_tags.join(" ")
+        };
+        let caption = format!("Part {}/{} | {}", idx + 1, total_clips, tags_str);
         let dest_path_str = dest_path.to_string_lossy().to_string();
 
         sqlx::query(

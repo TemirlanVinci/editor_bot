@@ -1,3 +1,4 @@
+pub mod hashtags;
 pub mod tiktok;
 
 use crate::error::AppError;

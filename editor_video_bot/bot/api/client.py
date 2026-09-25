@@ -192,3 +192,20 @@ async def update_task_status(task_id: int, status: str, error_log: Optional[str]
         if response.status != 200:
             text = await response.text()
             logger.error(f"Failed to update task status ({response.status}): {text}")
+
+
+async def get_random_hashtags(count: int = 5) -> List[str]:
+    """Fetches count random hashtags from backend API."""
+    global _session
+    if _session is None:
+        await init_session()
+
+    url = f"{API_BASE.rstrip('/')}/api/v1/hashtags/random?count={count}"
+    headers = _get_headers()
+
+    async with _session.get(url, headers=headers) as response:
+        if response.status != 200:
+            text = await response.text()
+            logger.error(f"Failed to fetch hashtags ({response.status}): {text}")
+            return []
+        return await response.json()

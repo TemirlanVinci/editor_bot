@@ -35,5 +35,9 @@ pub fn build_router() -> Router<PgPool> {
             "/queue/update_status",
             post(crate::handlers::tiktok::update_task_status),
         )
+        .route(
+            "/hashtags/random",
+            get(crate::handlers::hashtags::get_random_hashtags),
+        )
         .layer(DefaultBodyLimit::disable())
 }

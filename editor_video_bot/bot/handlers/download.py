@@ -5,7 +5,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, Message
 
-from api.client import download_video
+from api.client import download_video, get_random_hashtags
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,14 @@ async def cmd_download(message: Message):
             )
             return
 
+        try:
+            tags = await get_random_hashtags(5)
+            tags_str = " ".join(tags)
+        except Exception:
+            tags_str = ""
+
         buffered_file = BufferedInputFile(video_bytes, filename="video.mp4")
-        await message.answer_video(video=buffered_file)
+        await message.answer_video(video=buffered_file, caption=tags_str if tags_str else None)
         await status_msg.delete()
 
     except asyncio.TimeoutError:

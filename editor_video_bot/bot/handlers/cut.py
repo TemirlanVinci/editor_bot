@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
 from config import TELEGRAM_LOCAL_SERVER
-from api.client import cut_video, download_video_to_file
+from api.client import cut_video, download_video_to_file, get_random_hashtags
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,15 @@ async def run_cut_and_send(message: Message, status_msg: Message, video_path: st
                 part_num = extract_number(file_name) or i
                 fragment_path = os.path.join(extract_dir, file_name)
                 input_file = FSInputFile(fragment_path)
-                await message.answer_video(input_file, caption=str(part_num))
+
+                try:
+                    tags = await get_random_hashtags(5)
+                    tags_str = " ".join(tags)
+                except Exception:
+                    tags_str = ""
+
+                caption = f"Часть {part_num}\n\n{tags_str}" if tags_str else str(part_num)
+                await message.answer_video(input_file, caption=caption)
 
             await status_msg.delete()
         except Exception as e:
