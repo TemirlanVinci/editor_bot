@@ -17,26 +17,58 @@ fn get_media_dir() -> PathBuf {
 }
 
 fn parse_publish_time(time_str: &str) -> NaiveTime {
-    let parts: Vec<&str> = time_str.split(':').collect();
-    if parts.len() >= 2 {
-        let hour: u32 = parts[0].parse().unwrap_or(13);
-        let min: u32 = parts[1].parse().unwrap_or(0);
-        let sec: u32 = if parts.len() > 2 {
-            parts[2].parse().unwrap_or(0)
-        } else {
-            0
-        };
-        NaiveTime::from_hms_opt(hour, min, sec)
-            .unwrap_or_else(|| NaiveTime::from_hms_opt(13, 0, 0).unwrap())
-    } else {
-        NaiveTime::from_hms_opt(13, 0, 0).unwrap()
+    parse_publish_times(time_str).into_iter().next().unwrap_or_else(|| NaiveTime::from_hms_opt(13, 0, 0).unwrap())
+}
+
+fn parse_publish_times(time_str: &str) -> Vec<NaiveTime> {
+    let mut times = Vec::new();
+    for part in time_str.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let sub_parts: Vec<&str> = part.split(':').collect();
+        if sub_parts.len() >= 2 {
+            let hour: u32 = sub_parts[0].parse().unwrap_or(13);
+            let min: u32 = sub_parts[1].parse().unwrap_or(0);
+            let sec: u32 = if sub_parts.len() > 2 {
+                sub_parts[2].parse().unwrap_or(0)
+            } else {
+                0
+            };
+            if let Some(t) = NaiveTime::from_hms_opt(hour, min, sec) {
+                times.push(t);
+            }
+        }
     }
+    if times.is_empty() {
+        times.push(NaiveTime::from_hms_opt(13, 0, 0).unwrap());
+    }
+    times.sort();
+    times.dedup();
+    times
+}
+
+fn get_next_scheduled_time(after_dt: NaiveDateTime, times: &[NaiveTime]) -> NaiveDateTime {
+    let current_date = after_dt.date();
+    let current_time = after_dt.time();
+
+    for &t in times {
+        if t > current_time {
+            return NaiveDateTime::new(current_date, t);
+        }
+    }
+
+    let next_date = current_date + chrono::Duration::days(1);
+    NaiveDateTime::new(next_date, times[0])
 }
 
 pub async fn get_active_accounts(pool: &PgPool) -> Result<Vec<AccountDto>, AppError> {
     let rows = sqlx::query(
         r#"
-        SELECT id, name, cookies_path, proxy_url, publish_time::text, interval_days, is_active
+        SELECT id, name, cookies_path, proxy_url,
+               COALESCE(NULLIF(publish_times, ''), publish_time::text, '13:00') as publish_time,
+               interval_days, is_active
         FROM accounts
         WHERE is_active = TRUE
         ORDER BY id ASC;
@@ -54,7 +86,7 @@ pub async fn get_active_accounts(pool: &PgPool) -> Result<Vec<AccountDto>, AppEr
             proxy_url: row.get("proxy_url"),
             publish_time: row
                 .get::<Option<String>, _>("publish_time")
-                .unwrap_or_else(|| "13:00:00".to_string()),
+                .unwrap_or_else(|| "13:00".to_string()),
             interval_days: row.get::<Option<i32>, _>("interval_days").unwrap_or(1),
             is_active: row.get("is_active"),
         });
@@ -66,7 +98,9 @@ pub async fn get_active_accounts(pool: &PgPool) -> Result<Vec<AccountDto>, AppEr
 pub async fn get_account_by_id(pool: &PgPool, id: i32) -> Result<Option<AccountDto>, AppError> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, cookies_path, proxy_url, publish_time::text, interval_days, is_active
+        SELECT id, name, cookies_path, proxy_url,
+               COALESCE(NULLIF(publish_times, ''), publish_time::text, '13:00') as publish_time,
+               interval_days, is_active
         FROM accounts
         WHERE id = $1;
         "#,
@@ -83,7 +117,7 @@ pub async fn get_account_by_id(pool: &PgPool, id: i32) -> Result<Option<AccountD
             proxy_url: r.get("proxy_url"),
             publish_time: r
                 .get::<Option<String>, _>("publish_time")
-                .unwrap_or_else(|| "13:00:00".to_string()),
+                .unwrap_or_else(|| "13:00".to_string()),
             interval_days: r.get::<Option<i32>, _>("interval_days").unwrap_or(1),
             is_active: r.get("is_active"),
         }))
@@ -96,7 +130,7 @@ pub async fn create_account(
     pool: &PgPool,
     req: &CreateAccountRequest,
 ) -> Result<AccountDto, AppError> {
-    let p_time = req.publish_time.as_deref().unwrap_or("13:00:00");
+    let p_time = req.publish_time.as_deref().unwrap_or("13:00");
     let interval = req.interval_days.unwrap_or(1);
     let active = req.is_active.unwrap_or(true);
     let proxy = req.proxy_url.as_deref().unwrap_or("");
@@ -105,15 +139,18 @@ pub async fn create_account(
 
     let row = sqlx::query(
         r#"
-        INSERT INTO accounts (name, cookies_path, proxy_url, publish_time, interval_days, is_active)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, name, cookies_path, proxy_url, publish_time::text, interval_days, is_active;
+        INSERT INTO accounts (name, cookies_path, proxy_url, publish_time, publish_times, interval_days, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, name, cookies_path, proxy_url,
+                  COALESCE(NULLIF(publish_times, ''), publish_time::text, '13:00') as publish_time,
+                  interval_days, is_active;
         "#,
     )
     .bind(&req.name)
     .bind(&req.cookies_path)
     .bind(proxy)
     .bind(time_obj)
+    .bind(p_time)
     .bind(interval)
     .bind(active)
     .fetch_one(pool)
@@ -126,7 +163,7 @@ pub async fn create_account(
         proxy_url: row.get("proxy_url"),
         publish_time: row
             .get::<Option<String>, _>("publish_time")
-            .unwrap_or_else(|| "13:00:00".to_string()),
+            .unwrap_or_else(|| "13:00".to_string()),
         interval_days: row.get::<Option<i32>, _>("interval_days").unwrap_or(1),
         is_active: row.get("is_active"),
     })
@@ -224,23 +261,12 @@ pub async fn schedule_clips(
     .await?
     .flatten();
 
-    let p_time = parse_publish_time(&account.publish_time);
-    let interval_days = account.interval_days.max(1) as i64;
+    let times = parse_publish_times(&account.publish_time);
     let now = Utc::now().naive_utc();
 
-    let start_date: NaiveDateTime = match max_scheduled {
-        Some(latest) => {
-            let next_day = latest.date() + chrono::Duration::days(interval_days);
-            NaiveDateTime::new(next_day, p_time)
-        }
-        None => {
-            let target_today = NaiveDateTime::new(now.date(), p_time);
-            if target_today <= now {
-                NaiveDateTime::new(now.date() + chrono::Duration::days(1), p_time)
-            } else {
-                target_today
-            }
-        }
+    let mut current_ref = match max_scheduled {
+        Some(latest) if latest > now => latest,
+        _ => now,
     };
 
     let acc_storage_dir = media_dir.join(format!("acc_{}", req.account_id));
@@ -252,9 +278,15 @@ pub async fn schedule_clips(
     })?;
 
     let mut tx = pool.begin().await?;
+    let mut first_scheduled_at = None;
 
     for (idx, (_filename, src_path)) in clip_files.iter().enumerate() {
-        let scheduled_at = start_date + chrono::Duration::days(idx as i64 * interval_days);
+        let scheduled_at = get_next_scheduled_time(current_ref, &times);
+        current_ref = scheduled_at;
+        if first_scheduled_at.is_none() {
+            first_scheduled_at = Some(scheduled_at);
+        }
+
         let dest_filename = format!("job_{}_part_{:02}.mp4", req.job_id, idx + 1);
         let dest_path = acc_storage_dir.join(&dest_filename);
 
@@ -296,14 +328,18 @@ pub async fn schedule_clips(
     let _ = fs::remove_dir_all(parent_tmp);
     let _ = fs::remove_dir_all(&source_dir);
 
+    let start_date_str = first_scheduled_at
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+
     info!(
         "Scheduled {} clips for account #{} starting at {}",
-        total_clips, req.account_id, start_date
+        total_clips, req.account_id, start_date_str
     );
 
     Ok(ScheduleClipsResponse {
         scheduled_count: total_clips,
-        first_scheduled_at: start_date.format("%Y-%m-%d %H:%M:%S").to_string(),
+        first_scheduled_at: start_date_str,
     })
 }
 
