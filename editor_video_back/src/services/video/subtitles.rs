@@ -149,12 +149,12 @@ pub async fn transcribe_words(
     audio_path: &Path,
     language: &str,
 ) -> Result<Vec<TimedWord>, AppError> {
-    // Сериализуем транскрибацию Whisper: whisper.cpp / GGML не потокобезопасен
-    // при одновременном запуске нескольких процессов распознавания на одном контексте.
-    let _guard = get_whisper_lock().lock().await;
-
     let wav_path = audio_path.with_extension("wav");
     convert_to_wav(audio_path, &wav_path).await?;
+
+    // Сериализуем только инференс Whisper: whisper.cpp / GGML не потокобезопасен
+    // при одновременном запуске нескольких процессов распознавания на одном контексте.
+    let _guard = get_whisper_lock().lock().await;
 
     let language = language.to_string();
     let wav_path_for_blocking = wav_path.clone();

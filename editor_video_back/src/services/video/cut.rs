@@ -82,8 +82,12 @@ pub async fn process_video(
         "⚙️ [Step 2/5] Preparing random background video sequence (required duration: {:.2}s)...",
         total_required_duration
     );
-    let background_path =
-        crate::db::prepare_background_sequence(pool, total_required_duration, temp_dir).await?;
+    let background_path = crate::services::video::background::prepare_background_sequence(
+        pool,
+        total_required_duration,
+        temp_dir,
+    )
+    .await?;
 
     tracing::info!("⚙️ [Step 3/5] Picking random background music track...");
     let music_path = crate::services::video::music::get_random_music(&music_dir()).await?;
