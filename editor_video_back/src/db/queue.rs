@@ -116,3 +116,20 @@ pub async fn update_task_status(
         Ok(None)
     }
 }
+
+pub async fn clear_account_queue(pool: &PgPool, account_id: i32) -> Result<Vec<String>, AppError> {
+    let rows = sqlx::query(
+        r#"
+        DELETE FROM queue
+        WHERE account_id = $1
+        RETURNING file_path;
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+
+    let paths = rows.into_iter().map(|r| r.get("file_path")).collect();
+    Ok(paths)
+}
+

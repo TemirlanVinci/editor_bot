@@ -1,7 +1,7 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 
 use sqlx::PgPool;
@@ -22,6 +22,10 @@ pub fn build_router() -> Router<PgPool> {
             "/accounts/{id}",
             get(crate::handlers::tiktok::get_account_by_id)
                 .delete(crate::handlers::tiktok::delete_account),
+        )
+        .route(
+            "/accounts/{id}/videos",
+            delete(crate::handlers::tiktok::clear_account_videos),
         )
         .route(
             "/queue/schedule",

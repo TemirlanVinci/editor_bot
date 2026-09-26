@@ -31,3 +31,10 @@ pub struct UpdateTaskStatusRequest {
     pub status: String, // 'published', 'failed'
     pub error_log: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ClearAccountVideosResponse {
+    pub deleted_count: usize,
+    pub account_id: i32,
+}
+

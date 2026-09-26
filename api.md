@@ -107,6 +107,23 @@ X-Bot-Secret: <secret>
 
 ---
 
+## DELETE /api/v1/accounts/{id}/videos
+X-Bot-Secret: <secret>
+
+### Назначение
+Удалить все видео из архива аккаунта (физические файлы и все задачи в очереди `queue`).
+
+### Ответ (HTTP 200 OK):
+```json
+{
+  "deleted_count": 10,
+  "account_id": 1
+}
+```
+
+---
+
+
 ## POST /api/v1/queue/schedule
 Content-Type: application/json  
 X-Bot-Secret: <secret>

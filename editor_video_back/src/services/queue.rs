@@ -2,7 +2,10 @@ use crate::db::accounts as db_accounts;
 use crate::db::hashtags as db_hashtags;
 use crate::db::queue as db_queue;
 use crate::error::AppError;
-use crate::models::queue::{ScheduleClipsRequest, ScheduleClipsResponse, UpdateTaskStatusRequest};
+use crate::models::queue::{
+    ClearAccountVideosResponse, ScheduleClipsRequest, ScheduleClipsResponse,
+    UpdateTaskStatusRequest,
+};
 use chrono::{NaiveDateTime, NaiveTime, Utc};
 use sqlx::PgPool;
 use std::env;
@@ -223,3 +226,56 @@ pub async fn update_task_status(
 
     Ok(())
 }
+
+pub async fn clear_account_videos(
+    pool: &PgPool,
+    account_id: i32,
+) -> Result<ClearAccountVideosResponse, AppError> {
+    let account = db_accounts::get_account_by_id(pool, account_id)
+        .await?
+        .ok_or_else(|| AppError::Validation(format!("Account #{account_id} not found")))?;
+
+    let deleted_paths = db_queue::clear_account_queue(pool, account_id).await?;
+
+    let mut deleted_count = 0;
+    for file_path in &deleted_paths {
+        let path = Path::new(file_path);
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            if let Err(e) = tokio::fs::remove_file(path).await {
+                warn!(file_path = %file_path, error = %e, "Failed to remove video file during archive cleanup");
+            } else {
+                deleted_count += 1;
+            }
+        }
+    }
+
+    let media_dir = get_media_dir();
+    let acc_storage_dir = media_dir.join(format!("acc_{account_id}"));
+    if tokio::fs::try_exists(&acc_storage_dir).await.unwrap_or(false)
+        && let Ok(mut entries) = tokio::fs::read_dir(&acc_storage_dir).await
+    {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file()
+                && let Err(e) = tokio::fs::remove_file(&path).await
+            {
+                warn!(path = ?path, error = %e, "Failed to remove file from account dir");
+            }
+        }
+    }
+
+    let final_count = deleted_paths.len().max(deleted_count);
+
+    info!(
+        account_id = %account_id,
+        account_name = %account.name,
+        deleted_count = %final_count,
+        "Cleared all video archive files and queue for account"
+    );
+
+    Ok(ClearAccountVideosResponse {
+        deleted_count: final_count,
+        account_id,
+    })
+}
+

@@ -194,6 +194,22 @@ async def update_task_status(task_id: int, status: str, error_log: Optional[str]
             logger.error(f"Failed to update task status ({response.status}): {text}")
 
 
+async def clear_account_videos(account_id: int) -> Dict[str, Any]:
+    """Clears all video archive files and queue for an account on backend."""
+    global _session
+    if _session is None:
+        await init_session()
+
+    url = f"{API_BASE.rstrip('/')}/api/v1/accounts/{account_id}/videos"
+    headers = _get_headers()
+
+    async with _session.delete(url, headers=headers) as response:
+        if response.status != 200:
+            text = await response.text()
+            raise Exception(f"Failed to clear account videos ({response.status}): {text}")
+        return await response.json()
+
+
 async def get_random_hashtags(count: int = 5) -> List[str]:
     """Fetches count random hashtags from backend API."""
     global _session
@@ -209,3 +225,4 @@ async def get_random_hashtags(count: int = 5) -> List[str]:
             logger.error(f"Failed to fetch hashtags ({response.status}): {text}")
             return []
         return await response.json()
+

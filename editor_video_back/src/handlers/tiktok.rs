@@ -2,7 +2,10 @@ use crate::db::accounts as db_accounts;
 use crate::db::queue as db_queue;
 use crate::error::AppError;
 use crate::models::account::{AccountDto, CreateAccountRequest};
-use crate::models::queue::{ScheduleClipsRequest, ScheduleClipsResponse, UpdateTaskStatusRequest};
+use crate::models::queue::{
+    ClearAccountVideosResponse, ScheduleClipsRequest, ScheduleClipsResponse,
+    UpdateTaskStatusRequest,
+};
 use crate::services::queue as queue_service;
 use axum::{
     Json,
@@ -49,6 +52,14 @@ pub async fn delete_account(
     }
 }
 
+pub async fn clear_account_videos(
+    State(pool): State<PgPool>,
+    Path(id): Path<i32>,
+) -> Result<Json<ClearAccountVideosResponse>, AppError> {
+    let res = queue_service::clear_account_videos(&pool, id).await?;
+    Ok(Json(res))
+}
+
 pub async fn schedule_clips(
     State(pool): State<PgPool>,
     Json(payload): Json<ScheduleClipsRequest>,
@@ -74,3 +85,4 @@ pub async fn update_task_status(
     queue_service::update_task_status(&pool, &payload).await?;
     Ok(StatusCode::OK)
 }
+
