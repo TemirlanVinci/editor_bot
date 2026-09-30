@@ -30,10 +30,10 @@ def extract_number(filename: str) -> int:
     return int(match.group()) if match else 0
 
 
-@router.message(Command("acc"))
-async def cmd_acc(message: Message):
+@router.message(Command("reddit_acc", "acc"))
+async def cmd_reddit_acc(message: Message):
     """
-    Handler for command /acc <url>
+    Handler for command /reddit_acc <url>
     1. Downloads video from backend endpoint POST /api/v1/video/download
     2. Cuts video into clips via POST /api/v1/video/cut
     3. Displays inline keyboard to select target TikTok account or cancel
@@ -41,7 +41,7 @@ async def cmd_acc(message: Message):
     args = message.text.split(maxsplit=1) if message.text else []
     if len(args) < 2 or not args[1].strip():
         await message.answer(
-            "Пожалуйста, укажите ссылку на видео.\nПример: `/acc https://www.youtube.com/watch?v=...`",
+            "Пожалуйста, укажите ссылку на видео.\nПример: `/reddit_acc https://www.youtube.com/watch?v=...`",
             parse_mode="Markdown",
         )
         return

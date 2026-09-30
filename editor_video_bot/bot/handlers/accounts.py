@@ -1,14 +1,39 @@
+import os
 import logging
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
 from api.client import get_active_accounts, add_account, clear_account_videos
-from keyboards.acc_kb import get_clear_archive_keyboard, get_confirm_clear_keyboard
+from config import MEDIA_DIR
+from keyboards.acc_kb import (
+    get_clear_archive_keyboard,
+    get_confirm_clear_keyboard,
+    get_account_videos_keyboard,
+    get_account_video_detail_keyboard,
+    get_account_videos_all_keyboard,
+)
 
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+def count_account_videos(account_id: int) -> int:
+    """Counts video files in the account directory /app/media/acc_<account_id>."""
+    acc_dir = os.path.join(MEDIA_DIR, f"acc_{account_id}")
+    if not os.path.exists(acc_dir) or not os.path.isdir(acc_dir):
+        return 0
+    valid_exts = (".mp4", ".mov", ".mkv", ".avi", ".webm")
+    try:
+        files = [
+            f for f in os.listdir(acc_dir)
+            if not f.startswith(".") and f.lower().endswith(valid_exts)
+        ]
+        return len(files)
+    except Exception as e:
+        logger.error(f"Error counting videos in {acc_dir}: {e}")
+        return 0
 
 
 @router.message(Command("accounts"))
@@ -28,8 +53,10 @@ async def cmd_accounts(message: Message):
             proxy = acc.get("proxy_url") or "Без прокси"
             pub_times = acc.get("publish_time") or "13:00"
             slots_count = len([t for t in pub_times.split(",") if t.strip()])
+            video_cnt = count_account_videos(acc["id"])
             text += (
                 f"• **#{acc['id']} {acc['name']}**\n"
+                f"  🎬 Видео в директории: `{video_cnt}`\n"
                 f"  🕒 Время публикаций ({slots_count} в день): `{pub_times}`\n"
                 f"  🌐 Прокси: `{proxy}`\n"
                 f"  🍪 Куки: `{acc['cookies_path']}`\n\n"
@@ -39,6 +66,137 @@ async def cmd_accounts(message: Message):
     except Exception as e:
         logger.error(f"Error listing accounts: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка получения списка аккаунтов: {e}")
+
+
+@router.message(Command("videos_count", "videos", "account_videos", "acc_videos"))
+async def cmd_account_videos(message: Message):
+    """
+    Displays buttons for accounts to check how many videos are stored in each account's directory.
+    """
+    try:
+        accounts = await get_active_accounts()
+        if not accounts:
+            await message.answer(
+                "ℹ️ В базе нет активных аккаунтов TikTok.\nДобавьте аккаунт с помощью `/add_account`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        kb = get_account_videos_keyboard(accounts)
+        await message.answer(
+            "📁 **Просмотр количества видео в директориях аккаунтов**\n\n"
+            "Выберите аккаунт ниже, чтобы узнать сколько видео находится в его папке:",
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"Error in cmd_account_videos: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка получения списка аккаунтов: {e}")
+
+
+@router.callback_query(F.data == "acc_videos:close")
+async def cb_acc_videos_close(callback: CallbackQuery):
+    if callback.message:
+        await callback.message.delete()
+    await callback.answer()
+
+
+@router.callback_query(F.data == "acc_videos:menu")
+async def cb_acc_videos_menu(callback: CallbackQuery):
+    try:
+        accounts = await get_active_accounts()
+        if not accounts:
+            if callback.message:
+                await callback.message.edit_text("ℹ️ В базе нет активных аккаунтов TikTok.")
+            await callback.answer()
+            return
+
+        kb = get_account_videos_keyboard(accounts)
+        if callback.message:
+            await callback.message.edit_text(
+                "📁 **Просмотр количества видео в директориях аккаунтов**\n\n"
+                "Выберите аккаунт ниже, чтобы узнать сколько видео находится в его папке:",
+                reply_markup=kb,
+                parse_mode="Markdown",
+            )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error returning to video menu: {e}", exc_info=True)
+        await callback.answer("Ошибка при загрузке меню", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("acc_videos:view:"))
+async def cb_acc_videos_view(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer("Неверные данные колбэка", show_alert=True)
+        return
+
+    try:
+        account_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Неверный ID аккаунта", show_alert=True)
+        return
+
+    try:
+        accounts = await get_active_accounts()
+        account = next((a for a in accounts if a["id"] == account_id), None)
+        name = account["name"] if account else f"Аккаунт #{account_id}"
+
+        video_count = count_account_videos(account_id)
+        kb = get_account_video_detail_keyboard(account_id)
+
+        text = (
+            f"📱 **Аккаунт:** {name} (ID `#{account_id}`)\n\n"
+            f"🎬 **Количество видео в директории:** `{video_count}`\n"
+            f"📂 **Директория:** `acc_{account_id}`\n"
+        )
+        if account:
+            pub_times = account.get("publish_time") or "13:00"
+            text += f"🕒 **Расписание публикаций:** `{pub_times}`\n"
+
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                reply_markup=kb,
+                parse_mode="Markdown",
+            )
+        await callback.answer(f"Видео: {video_count}")
+    except Exception as e:
+        logger.error(f"Error fetching account videos: {e}", exc_info=True)
+        await callback.answer("Ошибка при подсчете видео", show_alert=True)
+
+
+@router.callback_query(F.data == "acc_videos:all")
+async def cb_acc_videos_all(callback: CallbackQuery):
+    try:
+        accounts = await get_active_accounts()
+        if not accounts:
+            if callback.message:
+                await callback.message.edit_text("ℹ️ В базе нет активных аккаунтов TikTok.")
+            await callback.answer()
+            return
+
+        total_videos = 0
+        text = "📊 **Количество видео по всем аккаунтам:**\n\n"
+        for acc in accounts:
+            cnt = count_account_videos(acc["id"])
+            total_videos += cnt
+            text += f"• **#{acc['id']} {acc['name']}**: `{cnt}` видео\n"
+
+        text += f"\n📦 **Всего видео на сервере:** `{total_videos}`"
+
+        kb = get_account_videos_all_keyboard()
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                reply_markup=kb,
+                parse_mode="Markdown",
+            )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error showing all account video counts: {e}", exc_info=True)
+        await callback.answer("Ошибка при получении данных", show_alert=True)
 
 
 @router.message(Command("add_account"))
@@ -166,5 +324,6 @@ async def cb_clear_acc_confirm(callback: CallbackQuery):
         if callback.message:
             await callback.message.edit_text(f"❌ Ошибка при очистке архива: {e}")
         await callback.answer("Ошибка при очистке", show_alert=True)
+
 
 

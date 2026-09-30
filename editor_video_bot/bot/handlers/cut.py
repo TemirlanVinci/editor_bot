@@ -89,8 +89,8 @@ async def run_cut_and_send(message: Message, status_msg: Message, video_path: st
         logger.error(f"Error during cut pipeline: {e}")
         await status_msg.edit_text("Произошла непредвиденная ошибка при обработке.")
 
-@router.message(Command("cut"))
-async def cmd_cut(message: Message, state: FSMContext):
+@router.message(Command("reddit_cut", "cut"))
+async def cmd_reddit_cut(message: Message, state: FSMContext):
     args = message.text.split(maxsplit=1) if message.text else []
     if len(args) > 1 and URL_PATTERN.search(args[1]):
         url = URL_PATTERN.search(args[1]).group(0)
@@ -160,7 +160,7 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
             f"❌ <b>Файл слишком большой ({size_mb} MB).</b>\n\n"
             f"Стандартный сервер Telegram Bot API ограничивает скачивание файлов через ботов до <b>20 MB</b>.\n\n"
             f"💡 <b>Что можно сделать:</b>\n"
-            f"1️⃣ Отправить <b>ссылку</b> на YouTube видео (например: <code>/cut https://youtu.be/...</code>)\n"
+            f"1️⃣ Отправить <b>ссылку</b> на YouTube видео (например: <code>/reddit_cut https://youtu.be/...</code>)\n"
             f"2️⃣ Или сжать видеофайл до размера менее 20 MB."
         )
         return
@@ -181,7 +181,7 @@ async def handle_video(message: Message, state: FSMContext, bot: Bot):
                     "❌ <b>Файл слишком большой.</b>\n\n"
                     "Telegram Bot API запрещает ботам скачивать файлы больше 20 MB из чата.\n\n"
                     "💡 Отправь <b>ссылку на YouTube</b> в виде:\n"
-                    "<code>/cut https://youtu.be/...</code>"
+                    "<code>/reddit_cut https://youtu.be/...</code>"
                 )
             else:
                 logger.error(f"Failed to download video from Telegram: {e}")

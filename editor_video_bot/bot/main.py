@@ -49,10 +49,11 @@ async def on_startup(bot: Bot) -> None:
     bot_commands = [
         BotCommand(command="start", description="🚀 Главное меню"),
         BotCommand(command="help", description="ℹ️ Список всех команд и помощь"),
-        BotCommand(command="acc", description="✂️ Нарезать видео и запланировать автопостинг"),
-        BotCommand(command="cut", description="✂️ Нарезать видео в клипы по 60 сек"),
+        BotCommand(command="reddit_acc", description="✂️ Нарезать видео и запланировать автопостинг"),
+        BotCommand(command="reddit_cut", description="✂️ Нарезать видео в клипы по 60 сек"),
         BotCommand(command="download", description="📥 Скачать видео с YouTube"),
         BotCommand(command="accounts", description="📱 Список аккаунтов TikTok"),
+        BotCommand(command="videos_count", description="📊 Количество видео по аккаунтам"),
         BotCommand(command="add_account", description="➕ Добавить аккаунт TikTok"),
         BotCommand(command="clear_archive", description="🗑 Очистить архив видео аккаунта"),
     ]
