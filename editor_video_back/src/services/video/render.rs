@@ -99,6 +99,23 @@ pub async fn render_fragments(
     music_path: &Path,
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>, AppError> {
+    render_narrative_fragments(
+        audio_paths,
+        Vec::new(),
+        background_path,
+        music_path,
+        output_dir,
+    )
+    .await
+}
+
+pub async fn render_narrative_fragments(
+    audio_paths: Vec<PathBuf>,
+    segment_words: Vec<Vec<subtitles::TimedWord>>,
+    background_path: &Path,
+    music_path: &Path,
+    output_dir: &Path,
+) -> Result<Vec<PathBuf>, AppError> {
     let total_fragments = audio_paths.len();
     info!(
         "🎬 Starting parallel rendering for {} fragment(s) with background {:?} and music {:?}",
@@ -148,6 +165,7 @@ pub async fn render_fragments(
         let sem = semaphore.clone();
         let ctx = whisper_ctx.clone();
         let language = subtitle_language.clone();
+        let pre_words = segment_words.get(index).cloned();
 
         let task = tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.map_err(|e| {
@@ -164,11 +182,17 @@ pub async fn render_fragments(
             // Изменение 1: Длительность под 1.08x (8% ускорения)
             let target_duration = audio_dur / SPEED_FACTOR;
 
-            info!(
-                "🗣️ Transcribing fragment {}/{} for karaoke subtitles...",
-                fragment_index, total_fragments
-            );
-            let mut words = subtitles::transcribe_words(ctx, &audio_path, &language).await?;
+            let mut words = if let Some(words) = pre_words
+                && !words.is_empty()
+            {
+                words
+            } else {
+                info!(
+                    "🗣️ Transcribing fragment {}/{} for karaoke subtitles...",
+                    fragment_index, total_fragments
+                );
+                subtitles::transcribe_words(ctx, &audio_path, &language).await?
+            };
 
             // Очищаем каждое слово от знаков препинания по краям (точки, запятые, кавычки и т.д.)
             for w in &mut words {
@@ -227,8 +251,18 @@ pub async fn render_fragments(
                     "libx264",
                     "-preset",
                     "fast",
+                    "-crf",
+                    "26",
+                    "-maxrate",
+                    "2800k",
+                    "-bufsize",
+                    "5600k",
+                    "-pix_fmt",
+                    "yuv420p",
                     "-c:a",
                     "aac",
+                    "-b:a",
+                    "128k",
                 ])
                 .arg(&output_path)
                 .stdout(Stdio::null())

@@ -21,7 +21,7 @@ pub async fn insert_background_files_batch(
     sqlx::query(
         r#"
         INSERT INTO background_videos (file_path)
-        SELECT * FROM UNNEST($1::text[])
+        SELECT DISTINCT * FROM UNNEST($1::text[])
         ON CONFLICT (file_path) DO NOTHING;
         "#,
     )

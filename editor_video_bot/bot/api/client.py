@@ -29,7 +29,7 @@ def _get_headers() -> Dict[str, str]:
     return headers
 
 
-async def cut_video(video_path: str, output_zip_path: str) -> None:
+async def cut_video(video_path: str, output_zip_path: str, include_intro: bool = True) -> None:
     """Sends video to Rust backend for cutting and saves the ZIP result."""
     global _session
     if _session is None:
@@ -41,8 +41,14 @@ async def cut_video(video_path: str, output_zip_path: str) -> None:
     with open(video_path, "rb") as f:
         form = aiohttp.FormData()
         form.add_field("video", f, filename="video.mp4", content_type="video/mp4")
+        form.add_field("include_intro", "true" if include_intro else "false")
 
-        async with _session.post(url, data=form, headers=headers) as response:
+        async with _session.post(
+            url,
+            data=form,
+            headers=headers,
+            params={"include_intro": "true" if include_intro else "false"},
+        ) as response:
             if response.status != 200:
                 text = await response.text()
                 raise Exception(f"Backend returned {response.status}: {text}")

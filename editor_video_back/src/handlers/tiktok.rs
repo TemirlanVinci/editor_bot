@@ -85,4 +85,3 @@ pub async fn update_task_status(
     queue_service::update_task_status(&pool, &payload).await?;
     Ok(StatusCode::OK)
 }
-

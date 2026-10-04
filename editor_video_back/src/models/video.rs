@@ -1,5 +1,23 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use validator::Validate;
+
+pub fn default_include_intro() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, PartialEq)]
+pub struct CutVideoRequest {
+    #[serde(default = "default_include_intro")]
+    pub include_intro: bool,
+}
+
+impl Default for CutVideoRequest {
+    fn default() -> Self {
+        Self {
+            include_intro: default_include_intro(),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct DownloadVideoRequest {
@@ -27,5 +45,36 @@ pub fn validate_youtube_url(url_str: &str) -> Result<(), validator::ValidationEr
         Ok(())
     } else {
         Err(validator::ValidationError::new("invalid_youtube_url"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cut_video_request_default() {
+        let req = CutVideoRequest::default();
+        assert!(req.include_intro);
+    }
+
+    #[test]
+    fn test_cut_video_request_serde_empty_json() {
+        let req: CutVideoRequest = serde_json::from_str("{}").expect("deserialization failed");
+        assert!(req.include_intro);
+    }
+
+    #[test]
+    fn test_cut_video_request_serde_explicit_false() {
+        let req: CutVideoRequest =
+            serde_json::from_str(r#"{"include_intro": false}"#).expect("deserialization failed");
+        assert!(!req.include_intro);
+    }
+
+    #[test]
+    fn test_cut_video_request_serde_explicit_true() {
+        let req: CutVideoRequest =
+            serde_json::from_str(r#"{"include_intro": true}"#).expect("deserialization failed");
+        assert!(req.include_intro);
     }
 }

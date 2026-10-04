@@ -23,6 +23,11 @@ pub struct ClaimDueTaskResponse {
     pub scheduled_at: String,
     pub proxy_url: String,
     pub cookies_path: String,
+    pub segment_id: Option<i32>,
+    pub segment_type: Option<String>,
+    pub start_time: Option<f64>,
+    pub end_time: Option<f64>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -37,4 +42,3 @@ pub struct ClearAccountVideosResponse {
     pub deleted_count: usize,
     pub account_id: i32,
 }
-

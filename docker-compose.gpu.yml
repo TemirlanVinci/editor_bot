@@ -1,0 +1,13 @@
+# Docker Compose оверлей для хостов с NVIDIA GPU.
+# Использование:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Либо автоматически через docker-compose.override.yml (симлинк или копия)
+services:
+  llm:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

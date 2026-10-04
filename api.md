@@ -29,14 +29,24 @@ X-Bot-Secret: <secret>
 Content-Type: multipart/form-data  
 X-Bot-Secret: <secret>
 
-### Multipart-поле:
-`video` = original.mp4
+### Параметры запроса:
+- **Query / Multipart-поле:** `include_intro` (boolean, опционально, по умолчанию `true`):
+  - `true`: полный пайплайн с вырезкой вводного вопроса/хука и склейкой `[intro] + [story]` для каждого клипа.
+  - `false`: вырезка только историй `[start_timestamp, end_timestamp]` без склейки вводной части.
+- **Multipart-поле:** `video` = original.mp4
 
 ### Назначение
-Принимает видеофайл, разделяет его на клипы (60 секунд с наложением фонового видео, текста и караоке-субтитров) и возвращает ZIP-архив с готовыми частями (`part_01.mp4`, `part_02.mp4`...).
+Принимает видеофайл и выполняет 2-стадийную обработку с помощью ИИ:
+1. **Whisper Transcription**: Единоразовое распознавание речи всего видео с извлечением пословных таймкодов, границ предложений и пауз.
+2. **Context Analysis (Qwen 3 8B)**: Смысловой анализ сюжета и разделение на логические части:
+   - **Хук (тизер)**: Первые 4–12 секунд с главной интригой ("Am I the asshole for...").
+   - **Истории**: Индивидуальные истории Reddit переменной длительности, разделенные сменой тем и естественными паузами речи.
+3. **FFmpeg Video Cutting**: Динамическая нарезка, наложение случайного фонового видео, караоке-субтитров (ASS) и музыки с ускорением 1.08x.
+
+Возвращает ZIP-архив с готовыми клипами (`fragment_1_final.mp4`, `fragment_2_final.mp4`...) и файлом метаданных `segments.json`.
 
 ### Ответы:
-- **HTTP 200 OK** (`Content-Type: application/zip`): ZIP-архив нарезанных клипов.
+- **HTTP 200 OK** (`Content-Type: application/zip`): ZIP-архив нарезанных клипов и `segments.json`.
 
 ---
 
@@ -163,10 +173,15 @@ X-Bot-Secret: <secret>
   "id": 105,
   "account_id": 1,
   "file_path": "/app/media/acc_1/job_12345_part_01.mp4",
-  "caption": "Part 1/10 | #fyp #viral",
+  "caption": "Hook: AITA for wedding... | #fyp #viral",
   "scheduled_at": "2026-09-20 13:00:00",
   "proxy_url": "http://user:pass@ip:port",
-  "cookies_path": "/app/media/cookies_acc1.json"
+  "cookies_path": "/app/media/cookies_acc1.json",
+  "segment_id": 1,
+  "segment_type": "hook",
+  "start_time": 0.0,
+  "end_time": 6.8,
+  "title": "AITA for refusing to attend"
 }
 ```
 - **HTTP 204 No Content**: Задач, готовых к публикации, в данный момент нет.

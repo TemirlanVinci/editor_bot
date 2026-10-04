@@ -139,6 +139,22 @@ pub async fn schedule_clips(
         .await
         .unwrap_or_default();
 
+    // Проверяем наличие segments.json для сохранения нарративных метаданных
+    let segments_file = source_dir.join("segments.json");
+    let parent_segments_file = source_dir.parent().map(|p| p.join("segments.json"));
+    let segments_data = if tokio::fs::try_exists(&segments_file).await.unwrap_or(false) {
+        tokio::fs::read_to_string(&segments_file).await.ok()
+    } else if let Some(parent_file) = parent_segments_file
+        && tokio::fs::try_exists(&parent_file).await.unwrap_or(false)
+    {
+        tokio::fs::read_to_string(&parent_file).await.ok()
+    } else {
+        None
+    };
+
+    let segmentation: Option<crate::services::video::segmentation::SegmentationResult> =
+        segments_data.and_then(|json_str| serde_json::from_str(&json_str).ok());
+
     let mut tx = pool.begin().await?;
     let mut first_scheduled_at = None;
 
@@ -172,7 +188,32 @@ pub async fn schedule_clips(
             clip_tags.join(" ")
         };
 
-        let caption = format!("Part {}/{} | {}", idx + 1, total_clips, tags_str);
+        let seg_meta = segmentation.as_ref().and_then(|s| s.segments.get(idx));
+
+        let meta = seg_meta.map(|s| db_queue::QueueItemMetadata {
+            segment_id: Some(s.segment_id as i32),
+            segment_type: Some(s.segment_type.as_str()),
+            start_time: Some(s.start_timestamp),
+            end_time: Some(s.end_timestamp),
+            title: Some(s.title.as_str()),
+        });
+
+        let caption = if let Some(s) = seg_meta {
+            if s.segment_type == "hook" {
+                format!("Hook: {} | {}", s.title, tags_str)
+            } else {
+                format!(
+                    "Part {}/{} - {} | {}",
+                    idx + 1,
+                    total_clips,
+                    s.title,
+                    tags_str
+                )
+            }
+        } else {
+            format!("Part {}/{} | {}", idx + 1, total_clips, tags_str)
+        };
+
         let dest_path_str = dest_path.to_string_lossy().to_string();
 
         db_queue::insert_queue_item(
@@ -181,6 +222,7 @@ pub async fn schedule_clips(
             &dest_path_str,
             &caption,
             scheduled_at,
+            meta.as_ref(),
         )
         .await?;
     }
@@ -251,7 +293,9 @@ pub async fn clear_account_videos(
 
     let media_dir = get_media_dir();
     let acc_storage_dir = media_dir.join(format!("acc_{account_id}"));
-    if tokio::fs::try_exists(&acc_storage_dir).await.unwrap_or(false)
+    if tokio::fs::try_exists(&acc_storage_dir)
+        .await
+        .unwrap_or(false)
         && let Ok(mut entries) = tokio::fs::read_dir(&acc_storage_dir).await
     {
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -278,4 +322,3 @@ pub async fn clear_account_videos(
         account_id,
     })
 }
-

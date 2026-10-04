@@ -22,3 +22,12 @@ ENV/
 .vscode/
 *.swp
 *.log
+docker-compose.override.yml
+
+# === Медиафайлы и временные данные ===
+media/tmp/
+media/downloads/
+media/clips/
+media/
+!media/
+!media/.gitkeep

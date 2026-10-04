@@ -19,6 +19,8 @@ from api.client import (
 from config import MEDIA_DIR
 from keyboards.acc_kb import get_account_selection_keyboard
 
+from handlers.cut import parse_cut_args
+
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -33,21 +35,21 @@ def extract_number(filename: str) -> int:
 @router.message(Command("reddit_acc", "acc"))
 async def cmd_reddit_acc(message: Message):
     """
-    Handler for command /reddit_acc <url>
+    Handler for command /reddit_acc <url> [yes|no] or /acc <url> [yes|no]
     1. Downloads video from backend endpoint POST /api/v1/video/download
-    2. Cuts video into clips via POST /api/v1/video/cut
+    2. Cuts video into clips via POST /api/v1/video/cut (Whisper + Qwen 3 8B)
     3. Displays inline keyboard to select target TikTok account or cancel
     """
-    args = message.text.split(maxsplit=1) if message.text else []
-    if len(args) < 2 or not args[1].strip():
+    url, include_intro = parse_cut_args(message.text or "")
+    if not url:
         await message.answer(
-            "Пожалуйста, укажите ссылку на видео.\nПример: `/reddit_acc https://www.youtube.com/watch?v=...`",
-            parse_mode="Markdown",
+            "Пожалуйста, укажите ссылку на видео.\nПример: <code>/reddit_acc https://www.youtube.com/watch?v=... [yes|no]</code>",
+            parse_mode="HTML",
         )
         return
 
-    url = args[1].strip()
-    status_msg = await message.answer("⏳ Скачивание видео...")
+    mode_desc = "с заголовком" if include_intro else "без заголовка"
+    status_msg = await message.answer(f"⏳ Скачивание видео ({mode_desc})...")
 
     job_id = f"{message.chat.id}_{uuid.uuid4().hex[:8]}"
     job_tmp_dir = os.path.join(MEDIA_DIR, "tmp", f"job_{job_id}")
@@ -63,19 +65,33 @@ async def cmd_reddit_acc(message: Message):
         with open(downloaded_path, "wb") as f:
             f.write(video_bytes)
 
-        # Step 2: Cut video
-        await status_msg.edit_text("✂️ Нарезка и обработка клипов...")
-        await cut_video(downloaded_path, zip_path)
+        # Step 2: Cut video (Whisper + Qwen 3 8B narrative segmentation)
+        await status_msg.edit_text(f"✂️ Анализ контекста (Whisper + Qwen 3 8B) и нарезка ({mode_desc})...")
+        await cut_video(downloaded_path, zip_path, include_intro=include_intro)
 
         # Extract ZIP clips
         os.makedirs(extracted_dir, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extracted_dir)
 
-        # Collect clip files
+        # Also copy segments.json to job_tmp_dir root so schedule_clips can find it directly
+        segments_json_src = os.path.join(extracted_dir, "segments.json")
+        segments_meta = []
+        if os.path.exists(segments_json_src):
+            try:
+                import json
+                with open(segments_json_src, "r", encoding="utf-8") as sf:
+                    seg_data = json.load(sf)
+                    segments_meta = seg_data.get("segments", [])
+                shutil.copy2(segments_json_src, os.path.join(job_tmp_dir, "segments.json"))
+            except Exception as e:
+                logger.warning(f"Error reading segments.json: {e}")
+
+        # Collect clip files (ignore non-video files such as segments.json)
         clip_files = [
             f for f in os.listdir(extracted_dir)
-            if os.path.isfile(os.path.join(extracted_dir, f)) and not f.startswith(".")
+            if os.path.isfile(os.path.join(extracted_dir, f))
+            and f.lower().endswith((".mp4", ".mov", ".mkv"))
         ]
         clip_files.sort(key=extract_number)
 
@@ -93,10 +109,19 @@ async def cmd_reddit_acc(message: Message):
             shutil.rmtree(job_tmp_dir, ignore_errors=True)
             return
 
+        # Build narrative summary
+        summary_lines = []
+        for seg in segments_meta[:4]:
+            seg_type = "🪝 Хук" if seg.get("segment_type") == "hook" else f"📖 История {seg.get('segment_id', '')}"
+            summary_lines.append(f"• {seg_type}: {seg.get('title', '')}")
+        if len(segments_meta) > 4:
+            summary_lines.append(f"• ... и ещё {len(segments_meta) - 4} сегментов")
+        summary_text = ("\n\n" + "\n".join(summary_lines)) if summary_lines else ""
+
         # Render Account Selection UI
         kb = get_account_selection_keyboard(accounts, job_id)
         await status_msg.edit_text(
-            f"✂️ Успешно создано клипов: {len(clip_files)}.\nВыберите аккаунт TikTok для публикации:",
+            f"✂️ Сегментировано по смыслу! Создано клипов: {len(clip_files)}.{summary_text}\n\nВыберите аккаунт TikTok для публикации:",
             reply_markup=kb,
         )
 
@@ -104,6 +129,7 @@ async def cmd_reddit_acc(message: Message):
         logger.error(f"Error in /acc pipeline: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Ошибка обработки запроса: {e}")
         shutil.rmtree(job_tmp_dir, ignore_errors=True)
+
 
 
 @router.callback_query(F.data.startswith("pub:"))

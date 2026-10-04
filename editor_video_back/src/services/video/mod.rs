@@ -4,4 +4,5 @@ pub mod cut;
 pub mod download;
 pub mod music;
 pub mod render;
+pub mod segmentation;
 pub mod subtitles;

@@ -1,9 +1,9 @@
 use crate::error::AppError;
-use crate::models::video::DownloadVideoRequest;
+use crate::models::video::{CutVideoRequest, DownloadVideoRequest};
 use axum::{
     Json,
     body::{Body, Bytes},
-    extract::{Multipart, State},
+    extract::{Multipart, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -33,9 +33,13 @@ impl Stream for CleanupStream {
 
 pub async fn cut_video(
     State(pool): State<PgPool>,
+    Query(query): Query<CutVideoRequest>,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
-    info!("📥 Received cut_video request");
+    info!(include_intro = %query.include_intro, "📥 Received cut_video request");
+    query.validate()?;
+
+    let mut include_intro = query.include_intro;
     let mut temp_dir = None;
     let mut input_path = None;
 
@@ -44,7 +48,8 @@ pub async fn cut_video(
         .await
         .map_err(|e| AppError::Validation(format!("Failed to parse multipart: {}", e)))?
     {
-        if field.name() == Some("video") {
+        let field_name = field.name().unwrap_or("").to_string();
+        if field_name == "video" {
             let dir = tempdir()
                 .map_err(|e| AppError::Validation(format!("Failed to create temp dir: {}", e)))?;
             let file_path = dir.path().join("input.mp4");
@@ -72,7 +77,26 @@ pub async fn cut_video(
 
             temp_dir = Some(dir);
             input_path = Some(file_path);
-            break;
+        } else if field_name == "include_intro"
+            && let Ok(bytes) = field.bytes().await
+            && let Ok(s) = std::str::from_utf8(&bytes)
+        {
+            let s_trimmed = s.trim().to_lowercase();
+            if s_trimmed == "true"
+                || s_trimmed == "1"
+                || s_trimmed == "yes"
+                || s_trimmed == "y"
+                || s_trimmed == "да"
+            {
+                include_intro = true;
+            } else if s_trimmed == "false"
+                || s_trimmed == "0"
+                || s_trimmed == "no"
+                || s_trimmed == "n"
+                || s_trimmed == "нет"
+            {
+                include_intro = false;
+            }
         }
     }
 
@@ -82,8 +106,13 @@ pub async fn cut_video(
         input_path.ok_or_else(|| AppError::Validation("Missing 'video' field".to_string()))?;
 
     // Process the video using FFmpeg and create a zip file
-    let zip_path =
-        crate::services::video::cut::process_video(&input_path, temp_dir.path(), &pool).await?;
+    let zip_path = crate::services::video::cut::process_video(
+        &input_path,
+        temp_dir.path(),
+        &pool,
+        include_intro,
+    )
+    .await?;
 
     let zip_file = TokioFile::open(&zip_path)
         .await

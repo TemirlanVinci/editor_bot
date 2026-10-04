@@ -7,9 +7,9 @@ router = Router()
 HELP_TEXT = (
     "🤖 <b>Панель управления видео-ботом</b>\n\n"
     "📋 <b>Список всех команд бота:</b>\n\n"
-    "✂️ <b>Обработка и публикации:</b>\n"
-    "• <code>/reddit_acc &lt;ссылка&gt;</code> — Нарезать видео и запланировать публикации в TikTok\n"
-    "• <code>/reddit_cut</code> — Нарезать видеофайлы (до 20 МБ) или видео по ссылке\n"
+    "✂️ <b>Смысловая нарезка (Whisper + Qwen 3 8B):</b>\n"
+    "• <code>/reddit_acc &lt;ссылка&gt; [yes|no]</code> — Нарезать видео по смыслу и запланировать публикации в TikTok\n"
+    "• <code>/reddit_cut &lt;ссылка&gt; [yes|no]</code> — Нарезать видео на клипы. Флаг <code>[yes|no]</code> управляет добавлением вступительного хука (по умолчанию <code>yes</code>)\n"
     "• <code>/download &lt;ссылка&gt;</code> — Скачать видео с YouTube\n\n"
     "📱 <b>Управление аккаунтами TikTok:</b>\n"
     "• <code>/accounts</code> — Список всех активных аккаунтов\n"
@@ -20,6 +20,7 @@ HELP_TEXT = (
     "• <code>/help</code> — Список команд и инструкции\n"
     "• <code>/start</code> — Главное меню"
 )
+
 
 
 @router.message(Command("start", "help"))

@@ -18,23 +18,47 @@ pub async fn get_max_scheduled_time(
     Ok(max_scheduled)
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct QueueItemMetadata<'a> {
+    pub segment_id: Option<i32>,
+    pub segment_type: Option<&'a str>,
+    pub start_time: Option<f64>,
+    pub end_time: Option<f64>,
+    pub title: Option<&'a str>,
+}
+
 pub async fn insert_queue_item(
     tx: &mut Transaction<'_, sqlx::Postgres>,
     account_id: i32,
     file_path: &str,
     caption: &str,
     scheduled_at: NaiveDateTime,
+    meta: Option<&QueueItemMetadata<'_>>,
 ) -> Result<(), AppError> {
+    let segment_id = meta.and_then(|m| m.segment_id);
+    let segment_type = meta.and_then(|m| m.segment_type);
+    let start_time = meta.and_then(|m| m.start_time);
+    let end_time = meta.and_then(|m| m.end_time);
+    let title = meta.and_then(|m| m.title);
+
     sqlx::query(
         r#"
-        INSERT INTO queue (account_id, file_path, caption, scheduled_at, status)
-        VALUES ($1, $2, $3, $4, 'pending');
+        INSERT INTO queue (
+            account_id, file_path, caption, scheduled_at, status,
+            segment_id, segment_type, start_time, end_time, title
+        )
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9);
         "#,
     )
     .bind(account_id)
     .bind(file_path)
     .bind(caption)
     .bind(scheduled_at)
+    .bind(segment_id)
+    .bind(segment_type)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(title)
     .execute(&mut **tx)
     .await?;
 
@@ -48,7 +72,8 @@ pub async fn claim_due_task(pool: &PgPool) -> Result<Option<ClaimDueTaskResponse
     let row = sqlx::query(
         r#"
         SELECT q.id, q.account_id, q.file_path, q.caption, q.scheduled_at::text,
-               a.proxy_url, a.cookies_path
+               a.proxy_url, a.cookies_path,
+               q.segment_id, q.segment_type, q.start_time, q.end_time, q.title
         FROM queue q
         JOIN accounts a ON q.account_id = a.id
         WHERE q.status = 'pending' AND q.scheduled_at <= $1
@@ -81,6 +106,11 @@ pub async fn claim_due_task(pool: &PgPool) -> Result<Option<ClaimDueTaskResponse
                 .unwrap_or_default(),
             proxy_url: r.get("proxy_url"),
             cookies_path: r.get("cookies_path"),
+            segment_id: r.get("segment_id"),
+            segment_type: r.get("segment_type"),
+            start_time: r.get("start_time"),
+            end_time: r.get("end_time"),
+            title: r.get("title"),
         }))
     } else {
         tx.commit().await?;
@@ -132,4 +162,3 @@ pub async fn clear_account_queue(pool: &PgPool, account_id: i32) -> Result<Vec<S
     let paths = rows.into_iter().map(|r| r.get("file_path")).collect();
     Ok(paths)
 }
-

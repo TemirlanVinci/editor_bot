@@ -1,3 +1,6 @@
+-- Ensure column exists before seeding
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS publish_times VARCHAR(512) DEFAULT '13:00';
+
 -- Seed sample TikTok accounts for testing and initial setup
 INSERT INTO accounts (name, cookies_path, proxy_url, publish_times, interval_days, is_active)
 VALUES 

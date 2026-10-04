@@ -38,11 +38,19 @@ services:
       MEDIA_DIR: /app/media
       WHISPER_MODEL_PATH: /app/models/ggml-${WHISPER_MODEL:-small}.bin
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
+      LLM_API_URL: ${LLM_API_URL:-http://llm:11434}
+      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen2.5:3b}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT_SECS: ${LLM_TIMEOUT_SECS:-120}
+      LLM_NUM_CTX: ${LLM_NUM_CTX:-8192}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
     ports:
       - "8081:8081"
     depends_on:
       postgres:
         condition: service_healthy
+      llm:
+        condition: service_started
     volumes:
       - ./media:/app/media
     logging:
@@ -50,6 +58,58 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  llm:
+    image: ollama/ollama:latest
+    container_name: editor_llm
+    restart: always
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        # Для активации GPU NVIDIA раскомментируйте блок ниже (требуется nvidia-container-toolkit на хосте):
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: all
+        #       capabilities: [gpu]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  llm-init:
+    image: ollama/ollama:latest
+    container_name: editor_llm_init
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://llm:11434
+      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen2.5:3b}
+    depends_on:
+      - llm
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "⏳ Waiting for Ollama service to start..."
+        while ! ollama list > /dev/null 2>&1; do
+          sleep 2
+        done
+        echo "📦 Ensuring model '$${QWEN_MODEL_NAME}' is downloaded..."
+        ollama pull $${QWEN_MODEL_NAME}
+        echo "✅ Model '$${QWEN_MODEL_NAME}' is ready!"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 
   bot:
     build:
@@ -77,3 +137,4 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:
