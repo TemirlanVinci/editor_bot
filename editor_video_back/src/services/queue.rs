@@ -7,6 +7,7 @@ use crate::models::queue::{
     UpdateTaskStatusRequest,
 };
 use chrono::{NaiveDateTime, NaiveTime, Utc};
+use rand::Rng;
 use sqlx::PgPool;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -29,24 +30,57 @@ fn extract_file_number(filename: &str) -> usize {
     num_str.parse::<usize>().unwrap_or(0)
 }
 
-fn get_next_scheduled_time(after_dt: NaiveDateTime, times: &[NaiveTime]) -> NaiveDateTime {
-    if times.is_empty() {
-        let next_date = after_dt.date() + chrono::Duration::days(1);
-        let default_time = NaiveTime::from_hms_opt(13, 0, 0).expect("Default time is valid");
-        return NaiveDateTime::new(next_date, default_time);
-    }
+fn get_next_base_slot(after_dt: NaiveDateTime, times: &[NaiveTime]) -> NaiveDateTime {
+    let default_slot = NaiveTime::from_hms_opt(13, 0, 0).expect("Default time is valid");
+    let sorted_times = if times.is_empty() {
+        vec![default_slot]
+    } else {
+        let mut t = times.to_vec();
+        t.sort();
+        t
+    };
 
     let current_date = after_dt.date();
     let current_time = after_dt.time();
 
-    for &t in times {
+    for &t in &sorted_times {
         if t > current_time {
             return NaiveDateTime::new(current_date, t);
         }
     }
 
     let next_date = current_date + chrono::Duration::days(1);
-    NaiveDateTime::new(next_date, times[0])
+    NaiveDateTime::new(next_date, sorted_times[0])
+}
+
+fn apply_human_jitter(
+    base_slot: NaiveDateTime,
+    now: NaiveDateTime,
+    prev_scheduled: Option<NaiveDateTime>,
+) -> NaiveDateTime {
+    let mut rng = rand::thread_rng();
+    // Human-like jitter:
+    // - Random minute offset: -12 to +18 minutes around target slot
+    // - Random second offset: 7 to 53 seconds (never round :00 seconds)
+    let jitter_min: i64 = rng.gen_range(-12..=18);
+    let jitter_sec: i64 = rng.gen_range(7..=53);
+    let mut scheduled_at = base_slot + chrono::Duration::minutes(jitter_min) + chrono::Duration::seconds(jitter_sec);
+
+    // Safety 1: Must always be strictly in the future (> now)
+    if scheduled_at <= now {
+        let delay_min: i64 = rng.gen_range(8..=25);
+        scheduled_at = now + chrono::Duration::minutes(delay_min) + chrono::Duration::seconds(jitter_sec);
+    }
+
+    // Safety 2: Must be at least 45 minutes after the previous scheduled item to avoid stacking
+    if let Some(prev) = prev_scheduled {
+        let min_gap = chrono::Duration::minutes(45);
+        if scheduled_at < prev + min_gap {
+            scheduled_at = prev + min_gap + chrono::Duration::minutes(rng.gen_range(5..=20)) + chrono::Duration::seconds(jitter_sec);
+        }
+    }
+
+    scheduled_at
 }
 
 pub async fn schedule_clips(
@@ -119,10 +153,11 @@ pub async fn schedule_clips(
     let times = db_accounts::parse_publish_times(&account.publish_time);
     let now = Utc::now().naive_utc();
 
-    let mut current_ref = match max_scheduled {
+    let mut current_base = match max_scheduled {
         Some(latest) if latest > now => latest,
         _ => now,
     };
+    let mut prev_scheduled: Option<NaiveDateTime> = max_scheduled;
 
     let acc_storage_dir = media_dir.join(format!("acc_{}", req.account_id));
     tokio::fs::create_dir_all(&acc_storage_dir)
@@ -159,8 +194,11 @@ pub async fn schedule_clips(
     let mut first_scheduled_at = None;
 
     for (idx, (_filename, src_path)) in clip_files.iter().enumerate() {
-        let scheduled_at = get_next_scheduled_time(current_ref, &times);
-        current_ref = scheduled_at;
+        let base_slot = get_next_base_slot(current_base, &times);
+        current_base = base_slot;
+
+        let scheduled_at = apply_human_jitter(base_slot, now, prev_scheduled);
+        prev_scheduled = Some(scheduled_at);
         if first_scheduled_at.is_none() {
             first_scheduled_at = Some(scheduled_at);
         }
@@ -321,4 +359,57 @@ pub async fn clear_account_videos(
         deleted_count: final_count,
         account_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, NaiveTime, Timelike};
+
+    #[test]
+    fn test_get_next_base_slot_multi_slot() {
+        let times = vec![
+            NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+        ];
+
+        let d = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
+        let dt1 = d.and_hms_opt(8, 0, 0).unwrap();
+        let next1 = get_next_base_slot(dt1, &times);
+        assert_eq!(next1, d.and_hms_opt(10, 0, 0).unwrap());
+
+        let next2 = get_next_base_slot(next1, &times);
+        assert_eq!(next2, d.and_hms_opt(18, 0, 0).unwrap());
+
+        let next3 = get_next_base_slot(next2, &times);
+        let next_d = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        assert_eq!(next3, next_d.and_hms_opt(10, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn test_apply_human_jitter_properties() {
+        let d = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
+        let base = d.and_hms_opt(13, 0, 0).unwrap();
+        let now = d.and_hms_opt(12, 0, 0).unwrap();
+
+        let jittered = apply_human_jitter(base, now, None);
+        assert!(jittered > now, "Jittered time must be in the future");
+        // Non-round seconds
+        let sec = jittered.time().second();
+        assert!(sec >= 5 && sec <= 55, "Seconds should be non-round: got {}", sec);
+
+        // Test with past now (e.g. now was already 13:05)
+        let now_late = d.and_hms_opt(13, 5, 0).unwrap();
+        let jittered_late = apply_human_jitter(base, now_late, None);
+        assert!(jittered_late > now_late, "Must be pushed ahead of now when late");
+
+        // Test minimum gap with previous item
+        let prev = d.and_hms_opt(13, 10, 0).unwrap();
+        let close_base = d.and_hms_opt(13, 15, 0).unwrap();
+        let spaced = apply_human_jitter(close_base, now, Some(prev));
+        assert!(
+            spaced >= prev + chrono::Duration::minutes(45),
+            "Must maintain minimum gap from previous item"
+        );
+    }
 }
