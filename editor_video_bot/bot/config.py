@@ -8,7 +8,12 @@ API_BASE = os.getenv("BACKEND_URL", os.getenv("API_BASE", "http://localhost:8081
 BOT_SECRET = os.getenv("BOT_SECRET")
 
 # Storage / Media Directory for Scheduled Media Files
-MEDIA_DIR = os.getenv("MEDIA_DIR", "/app/media")
+MEDIA_DIR = os.getenv("MEDIA_DIR")
+if not MEDIA_DIR:
+    if os.path.exists("/app/media"):
+        MEDIA_DIR = "/app/media"
+    else:
+        MEDIA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "media"))
 STORAGE_DIR = MEDIA_DIR
 
 # Worker polling interval in seconds
