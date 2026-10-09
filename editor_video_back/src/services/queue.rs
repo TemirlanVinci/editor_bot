@@ -6,7 +6,7 @@ use crate::models::queue::{
     ClearAccountVideosResponse, ScheduleClipsRequest, ScheduleClipsResponse,
     UpdateTaskStatusRequest,
 };
-use chrono::{NaiveDateTime, NaiveTime, Utc};
+use chrono::{NaiveDateTime, NaiveTime};
 use rand::Rng;
 use sqlx::PgPool;
 use std::env;
@@ -64,19 +64,24 @@ fn apply_human_jitter(
     // - Random second offset: 7 to 53 seconds (never round :00 seconds)
     let jitter_min: i64 = rng.gen_range(-12..=18);
     let jitter_sec: i64 = rng.gen_range(7..=53);
-    let mut scheduled_at = base_slot + chrono::Duration::minutes(jitter_min) + chrono::Duration::seconds(jitter_sec);
+    let mut scheduled_at =
+        base_slot + chrono::Duration::minutes(jitter_min) + chrono::Duration::seconds(jitter_sec);
 
     // Safety 1: Must always be strictly in the future (> now)
     if scheduled_at <= now {
         let delay_min: i64 = rng.gen_range(8..=25);
-        scheduled_at = now + chrono::Duration::minutes(delay_min) + chrono::Duration::seconds(jitter_sec);
+        scheduled_at =
+            now + chrono::Duration::minutes(delay_min) + chrono::Duration::seconds(jitter_sec);
     }
 
     // Safety 2: Must be at least 45 minutes after the previous scheduled item to avoid stacking
     if let Some(prev) = prev_scheduled {
         let min_gap = chrono::Duration::minutes(45);
         if scheduled_at < prev + min_gap {
-            scheduled_at = prev + min_gap + chrono::Duration::minutes(rng.gen_range(5..=20)) + chrono::Duration::seconds(jitter_sec);
+            scheduled_at = prev
+                + min_gap
+                + chrono::Duration::minutes(rng.gen_range(5..=20))
+                + chrono::Duration::seconds(jitter_sec);
         }
     }
 
@@ -151,7 +156,7 @@ pub async fn schedule_clips(
 
     let max_scheduled = db_queue::get_max_scheduled_time(pool, req.account_id).await?;
     let times = db_accounts::parse_publish_times(&account.publish_time);
-    let now = Utc::now().naive_utc();
+    let now = db_queue::now_kz();
 
     let mut current_base = match max_scheduled {
         Some(latest) if latest > now => latest,
@@ -361,6 +366,28 @@ pub async fn clear_account_videos(
     })
 }
 
+/// Automatically removes abandoned temporary job folders older than 24 hours.
+pub async fn cleanup_old_tmp_jobs(media_dir: &Path) {
+    let tmp_dir = media_dir.join("tmp");
+    if let Ok(mut entries) = tokio::fs::read_dir(&tmp_dir).await {
+        let now = std::time::SystemTime::now();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name.starts_with("job_")
+                && let Ok(metadata) = entry.metadata().await
+                && let Ok(modified) = metadata.modified()
+                && let Ok(age) = now.duration_since(modified)
+                && age.as_secs() > 86400
+            {
+                info!("🧹 Cleaning up abandoned tmp job directory: {:?}", path);
+                let _ = tokio::fs::remove_dir_all(&path).await;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,12 +423,19 @@ mod tests {
         assert!(jittered > now, "Jittered time must be in the future");
         // Non-round seconds
         let sec = jittered.time().second();
-        assert!(sec >= 5 && sec <= 55, "Seconds should be non-round: got {}", sec);
+        assert!(
+            (5..=55).contains(&sec),
+            "Seconds should be non-round: got {}",
+            sec
+        );
 
         // Test with past now (e.g. now was already 13:05)
         let now_late = d.and_hms_opt(13, 5, 0).unwrap();
         let jittered_late = apply_human_jitter(base, now_late, None);
-        assert!(jittered_late > now_late, "Must be pushed ahead of now when late");
+        assert!(
+            jittered_late > now_late,
+            "Must be pushed ahead of now when late"
+        );
 
         // Test minimum gap with previous item
         let prev = d.and_hms_opt(13, 10, 0).unwrap();

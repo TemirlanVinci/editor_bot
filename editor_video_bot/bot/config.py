@@ -22,3 +22,9 @@ WORKER_POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "60"))
 # Telegram Bot API Server URL (leave empty for standard Telegram API, or set e.g. http://telegram-bot-api:8081 for local server)
 TELEGRAM_LOCAL_SERVER = os.getenv("TELEGRAM_LOCAL_SERVER", "").strip()
 
+# Admin Whitelist (empty allows all users, or comma-separated Telegram user IDs)
+ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
+ADMIN_IDS: set[int] = {
+    int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdigit()
+}
+

@@ -156,7 +156,7 @@ pub fn get_context() -> Result<Arc<WhisperContext>, AppError> {
             .map_err(|e| format!("Failed to load Whisper model from {:?}: {}", path, e))
     });
 
-    result.clone().map_err(AppError::Validation)
+    result.clone().map_err(AppError::Internal)
 }
 
 /// Конвертирует произвольный аудиофайл в 16kHz mono WAV (формат, нужный Whisper'у).
@@ -172,13 +172,13 @@ async fn convert_to_wav(input_path: &Path, output_path: &Path) -> Result<(), App
         .output()
         .await
         .map_err(|e| {
-            AppError::Validation(format!("Failed to execute ffmpeg (wav convert): {}", e))
+            AppError::Internal(format!("Failed to execute ffmpeg (wav convert): {}", e))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("FFmpeg WAV conversion error: {}", stderr);
-        return Err(AppError::Validation(
+        return Err(AppError::Internal(
             "Failed to convert audio to WAV for transcription".to_string(),
         ));
     }
@@ -189,11 +189,11 @@ async fn convert_to_wav(input_path: &Path, output_path: &Path) -> Result<(), App
 /// Читает 16-bit mono WAV и возвращает нормализованные f32-сэмплы для Whisper с пиковой нормализацией.
 fn read_wav_samples(path: &Path) -> Result<Vec<f32>, AppError> {
     let mut reader = hound::WavReader::open(path)
-        .map_err(|e| AppError::Validation(format!("Failed to open WAV file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to open WAV file: {}", e)))?;
 
     let spec = reader.spec();
     if spec.channels != 1 {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::Internal(format!(
             "Expected mono WAV for transcription, got {} channels",
             spec.channels
         )));
@@ -202,7 +202,7 @@ fn read_wav_samples(path: &Path) -> Result<Vec<f32>, AppError> {
     let samples: Vec<i16> = reader
         .samples::<i16>()
         .collect::<Result<Vec<i16>, _>>()
-        .map_err(|e| AppError::Validation(format!("Failed to read WAV samples: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read WAV samples: {}", e)))?;
 
     if samples.is_empty() {
         return Ok(Vec::new());
@@ -300,7 +300,7 @@ pub async fn transcribe_words(
 
         let mut state = ctx
             .create_state()
-            .map_err(|e| AppError::Validation(format!("Failed to create Whisper state: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to create Whisper state: {}", e)))?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(&language));
@@ -325,13 +325,13 @@ pub async fn transcribe_words(
 
         state
             .full(params, &samples)
-            .map_err(|e| AppError::Validation(format!("Whisper transcription failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Whisper transcription failed: {}", e)))?;
 
         let mut raw_words = Vec::new();
         for segment in state.as_iter() {
             let text = segment
                 .to_str()
-                .map_err(|e| AppError::Validation(format!("Failed to get segment text: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Failed to get segment text: {}", e)))?;
 
             let trimmed = text.trim();
             if trimmed.is_empty() {
@@ -371,7 +371,7 @@ pub async fn transcribe_words(
         Ok(split_multi_word_tokens(&raw_words))
     })
     .await
-    .map_err(|e| AppError::Validation(format!("Transcription task panicked: {}", e)))??;
+    .map_err(|e| AppError::Internal(format!("Transcription task panicked: {}", e)))??;
 
     if let Err(e) = tokio::fs::remove_file(&wav_path).await {
         error!("Failed to remove temporary WAV file {:?}: {}", wav_path, e);

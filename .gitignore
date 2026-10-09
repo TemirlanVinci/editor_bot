@@ -2,6 +2,10 @@
 .env
 *.env
 .env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
 # === Rust ===
 /target/
@@ -24,10 +28,16 @@ ENV/
 *.log
 docker-compose.override.yml
 
-# === Медиафайлы и временные данные ===
+# === Медиафайлы, профили и временные данные ===
 media/tmp/
 media/downloads/
 media/clips/
+media/profiles/
+media/acc_*
+media/cookies*.json
+!media/cookies*.json.template
+media/accounts.json
+!media/accounts.template.json
+
+# Игнорировать всю папку media
 media/
-!media/
-!media/.gitkeep

@@ -5,10 +5,10 @@ services:
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-db_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qwerka00}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-editor_video_db}
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
     container_name: editor_backend
     restart: always
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD:-qwerka00}@postgres:5432/${POSTGRES_DB:-editor_video_db}
+      DATABASE_URL: postgres://${POSTGRES_USER:-db_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-editor_video_db}
       PORT: 8081
       BOT_SECRET: ${BOT_SECRET}
       MEDIA_DIR: /app/media
@@ -45,7 +45,7 @@ services:
       LLM_NUM_CTX: ${LLM_NUM_CTX:-8192}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +76,7 @@ services:
         #       count: all
         #       capabilities: [gpu]
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     logging:
@@ -123,6 +123,7 @@ services:
       BOT_SECRET: ${BOT_SECRET}
       MEDIA_DIR: /app/media
       TELEGRAM_LOCAL_SERVER: ${TELEGRAM_LOCAL_SERVER:-}
+      ADMIN_IDS: ${ADMIN_IDS:-}
 
 
     depends_on:

@@ -12,6 +12,7 @@ from aiogram.types import Message, CallbackQuery
 
 from api.client import (
     download_video,
+    download_video_to_file,
     cut_video,
     get_active_accounts,
     schedule_clips,
@@ -60,10 +61,8 @@ async def cmd_reddit_acc(message: Message):
     extracted_dir = os.path.join(job_tmp_dir, "clips")
 
     try:
-        # Step 1: Download video
-        video_bytes = await download_video(url)
-        with open(downloaded_path, "wb") as f:
-            f.write(video_bytes)
+        # Step 1: Download video (stream directly to disk)
+        await download_video_to_file(url, downloaded_path)
 
         # Step 2: Cut video (Whisper + Qwen 3 8B narrative segmentation)
         await status_msg.edit_text(f"✂️ Анализ контекста (Whisper + Qwen 3 8B) и нарезка ({mode_desc})...")

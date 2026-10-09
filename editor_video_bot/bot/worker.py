@@ -41,11 +41,15 @@ def load_cookies_from_file(cookies_path: str) -> List[Dict[str, Any]]:
     try:
         with open(cookies_path, "r", encoding="utf-8") as f:
             cookies = json.load(f)
+            # Support {"cookies": [...]} wrapper format as well as raw list
+            if isinstance(cookies, dict) and "cookies" in cookies:
+                cookies = cookies["cookies"]
+
             if isinstance(cookies, list):
                 # Ensure standard keys for Playwright
                 cleaned = []
                 for c in cookies:
-                    if "name" in c and "value" in c:
+                    if isinstance(c, dict) and "name" in c and "value" in c:
                         item = {
                             "name": str(c["name"]),
                             "value": str(c["value"]),
@@ -54,6 +58,12 @@ def load_cookies_from_file(cookies_path: str) -> List[Dict[str, Any]]:
                         }
                         if "sameSite" in c and c["sameSite"] in ("Strict", "Lax", "None"):
                             item["sameSite"] = c["sameSite"]
+                        if "secure" in c and isinstance(c["secure"], bool):
+                            item["secure"] = c["secure"]
+                        if "httpOnly" in c and isinstance(c["httpOnly"], bool):
+                            item["httpOnly"] = c["httpOnly"]
+                        if "expires" in c and isinstance(c["expires"], (int, float)):
+                            item["expires"] = float(c["expires"])
                         cleaned.append(item)
                 return cleaned
     except Exception as e:
@@ -111,11 +121,22 @@ async def human_type(page, locator, text: str) -> None:
             await asyncio.sleep(random.uniform(0.045, 0.14))
 
 
+async def apply_stealth_to_page(page) -> None:
+    """Applies stealth evasion to Playwright page (compatible with both 2.x and 1.x playwright-stealth)."""
+    try:
+        from playwright_stealth import Stealth
+        stealth_obj = Stealth()
+        await stealth_obj.apply_stealth_async(page)
+    except (ImportError, AttributeError):
+        try:
+            from playwright_stealth import stealth_async
+            await stealth_async(page)
+        except Exception as e:
+            logger.warning(f"Could not apply stealth evasion: {e}")
+
+
 async def upload_clip_to_tiktok(task: Dict[str, Any]) -> None:
     """Uses Playwright with persistent context & human behavior simulation to upload video to TikTok."""
-    from playwright.async_api import async_playwright
-    from playwright_stealth import stealth_async
-
     task_id = task["id"]
     account_id = task["account_id"]
     file_path = task["file_path"]
@@ -143,119 +164,125 @@ async def upload_clip_to_tiktok(task: Dict[str, Any]) -> None:
     profiles_dir = os.path.join(MEDIA_DIR, "profiles", f"acc_{account_id}")
     os.makedirs(profiles_dir, exist_ok=True)
 
-    async with async_playwright() as p:
-        browser_args = [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-            "--window-size=1920,1080",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ]
+    try:
+        from playwright.async_api import async_playwright
 
-        launch_kwargs: Dict[str, Any] = {
-            "user_data_dir": profiles_dir,
-            "headless": True,
-            "args": browser_args,
-            "viewport": {"width": 1920, "height": 1080},
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "locale": "en-US",
-            "timezone_id": "America/New_York",
-        }
-        if proxy_config:
-            launch_kwargs["proxy"] = proxy_config
-            logger.info(f"Using proxy server: {proxy_config['server']}")
+        async with async_playwright() as p:
+            browser_args = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1920,1080",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
 
-        context = await p.chromium.launch_persistent_context(**launch_kwargs)
+            launch_kwargs: Dict[str, Any] = {
+                "user_data_dir": profiles_dir,
+                "headless": True,
+                "args": browser_args,
+                "viewport": {"width": 1920, "height": 1080},
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
+            }
+            if proxy_config:
+                launch_kwargs["proxy"] = proxy_config
+                logger.info(f"Using proxy server: {proxy_config['server']}")
 
-        # Ensure navigator.webdriver is masked at engine level
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
+            context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
-        # Add cookies if provided
-        if cookies:
-            await context.add_cookies(cookies)
-            logger.info(f"Injected {len(cookies)} session cookies.")
-
-        page = context.pages[0] if context.pages else await context.new_page()
-        await stealth_async(page)
-
-        try:
-            # Step 1: Human warmup on TikTok main feed
-            logger.info("Performing warmup navigation to tiktok.com...")
             try:
-                await page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=45000)
-                await asyncio.sleep(random.uniform(4.0, 7.0))
-                # Slight scroll to emulate reading the page
-                await page.mouse.wheel(0, random.randint(300, 700))
-                await asyncio.sleep(random.uniform(2.5, 4.5))
-            except Exception as warmup_err:
-                logger.warning(f"Warmup warning (continuing to upload): {warmup_err}")
+                # Ensure navigator.webdriver is masked at engine level
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                """)
 
-            # Step 2: Navigate to TikTok Studio upload page
-            logger.info("Navigating to TikTok Studio upload page...")
-            await page.goto("https://www.tiktok.com/tiktokstudio/upload", wait_until="networkidle", timeout=60000)
-            await asyncio.sleep(random.uniform(2.0, 4.0))
+                # Add cookies if provided
+                if cookies:
+                    await context.add_cookies(cookies)
+                    logger.info(f"Injected {len(cookies)} session cookies.")
 
-            # Check if redirected to login page
-            if "login" in page.url:
-                raise Exception("Redirected to login page. Session cookies might be expired or invalid.")
+                page = context.pages[0] if context.pages else await context.new_page()
+                await apply_stealth_to_page(page)
 
-            # Step 3: Attach video file
-            logger.info("Locating file upload input...")
-            file_input = page.locator("input[type='file']")
-            await file_input.wait_for(state="attached", timeout=30000)
-            await file_input.set_input_files(file_path)
-            logger.info("Video file attached. Waiting for TikTok to process video preview...")
+                # Step 1: Human warmup on TikTok main feed
+                logger.info("Performing warmup navigation to tiktok.com...")
+                try:
+                    await page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=45000)
+                    await asyncio.sleep(random.uniform(4.0, 7.0))
+                    # Slight scroll to emulate reading the page
+                    await page.mouse.wheel(0, random.randint(300, 700))
+                    await asyncio.sleep(random.uniform(2.5, 4.5))
+                except Exception as warmup_err:
+                    logger.warning(f"Warmup warning (continuing to upload): {warmup_err}")
 
-            # Step 4: Wait for upload processing and caption area
-            caption_locator = page.locator("div[contenteditable='true'], textarea, [class*='caption'], [class*='editor']").first
-            await caption_locator.wait_for(state="visible", timeout=60000)
+                # Step 2: Navigate to TikTok Studio upload page
+                logger.info("Navigating to TikTok Studio upload page...")
+                await page.goto("https://www.tiktok.com/tiktokstudio/upload", wait_until="networkidle", timeout=60000)
+                await asyncio.sleep(random.uniform(2.0, 4.0))
 
-            # Wait an additional 5-10 seconds for video upload bar to settle
-            await asyncio.sleep(random.uniform(6.0, 10.0))
+                # Check if redirected to login page
+                if "login" in page.url:
+                    raise Exception("Redirected to login page. Session cookies might be expired or invalid.")
 
-            # Step 5: Enter caption with human-like typing
-            logger.info(f"Entering caption with human typing cadence: '{caption}'...")
-            await human_click(page, caption_locator)
-            await page.keyboard.press("Control+A")
-            await page.keyboard.press("Backspace")
-            await asyncio.sleep(random.uniform(0.3, 0.8))
+                # Step 3: Attach video file
+                logger.info("Locating file upload input...")
+                file_input = page.locator("input[type='file']")
+                await file_input.wait_for(state="attached", timeout=30000)
+                await file_input.set_input_files(file_path)
+                logger.info("Video file attached. Waiting for TikTok to process video preview...")
 
-            await human_type(page, caption_locator, caption)
-            logger.info("Caption entered successfully.")
+                # Step 4: Wait for upload processing and caption area
+                caption_locator = page.locator("div[contenteditable='true'], textarea, [class*='caption'], [class*='editor']").first
+                await caption_locator.wait_for(state="visible", timeout=60000)
 
-            # Human pause: review preview and caption before posting (5-9 sec)
-            review_delay = random.uniform(5.0, 9.0)
-            logger.info(f"Simulating human review before posting ({review_delay:.1f}s)...")
-            await asyncio.sleep(review_delay)
+                # Wait an additional 5-10 seconds for video upload bar to settle
+                await asyncio.sleep(random.uniform(6.0, 10.0))
 
-            # Step 6: Find Post / Publish button and click naturally
-            post_button = page.locator("button:has-text('Post'), button:has-text('Опубликовать'), button:has-text('Publish')").first
-            await post_button.wait_for(state="visible", timeout=30000)
+                # Step 5: Enter caption with human-like typing
+                logger.info(f"Entering caption with human typing cadence: '{caption}'...")
+                await human_click(page, caption_locator)
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Backspace")
+                await asyncio.sleep(random.uniform(0.3, 0.8))
 
-            logger.info("Moving cursor naturally and clicking Post button...")
-            await human_click(page, post_button)
+                await human_type(page, caption_locator, caption)
+                logger.info("Caption entered successfully.")
 
-            # Step 7: Wait for confirmation / publication finish
-            logger.info("Clicked Post button, waiting for confirmation...")
-            await asyncio.sleep(random.uniform(10.0, 15.0))
+                # Human pause: review preview and caption before posting (5-9 sec)
+                review_delay = random.uniform(5.0, 9.0)
+                logger.info(f"Simulating human review before posting ({review_delay:.1f}s)...")
+                await asyncio.sleep(review_delay)
 
-            # Check if modal or success message is present, or URL changed
-            await update_task_status(task_id, "published")
-            logger.info(f"✅ Task #{task_id} successfully published to TikTok with human simulation!")
+                # Step 6: Find Post / Publish button and click naturally
+                post_button = page.locator("button:has-text('Post'), button:has-text('Опубликовать'), button:has-text('Publish')").first
+                await post_button.wait_for(state="visible", timeout=30000)
 
-        except Exception as e:
-            err_msg = f"Playwright upload error: {e}"
-            logger.error(err_msg, exc_info=True)
-            await update_task_status(task_id, "failed", error_log=err_msg)
+                logger.info("Moving cursor naturally and clicking Post button...")
+                await human_click(page, post_button)
 
-        finally:
-            await context.close()
+                # Step 7: Wait for confirmation / publication finish
+                logger.info("Clicked Post button, waiting for confirmation...")
+                await asyncio.sleep(random.uniform(10.0, 15.0))
+
+                if "login" in page.url:
+                    raise Exception("Redirected to login page during publication. Session expired.")
+
+                # Check if modal or success message is present, or URL changed
+                await update_task_status(task_id, "published")
+                logger.info(f"✅ Task #{task_id} successfully published to TikTok with human simulation!")
+
+            finally:
+                await context.close()
+
+    except Exception as e:
+        err_msg = f"Playwright upload error: {e}"
+        logger.error(err_msg, exc_info=True)
+        await update_task_status(task_id, "failed", error_log=err_msg)
 
 
 async def start_worker_loop() -> None:

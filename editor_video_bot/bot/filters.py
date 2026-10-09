@@ -1,34 +1,31 @@
-'''import time 
-from aiogram.filters import BaseFilter
-from aiogram.types import Message, CallbackQuery
-
-from api.admin import get_admin_list
-
-REFRESH_INTERVAL = 300
-
-_admin_ids: set[int] = set()
-_last_refresh: float = 0.0
+from typing import Any, Awaitable, Callable, Dict
+from aiogram import BaseMiddleware
+from aiogram.types import CallbackQuery, Message, TelegramObject
+from config import ADMIN_IDS
 
 
-async def refresh_admins() -> None:
-    global _admin_ids, _last_refresh
+class AdminOnlyMiddleware(BaseMiddleware):
+    """
+    Restricts access to bot commands and callback queries.
+    If ADMIN_IDS is empty, all users are permitted.
+    If ADMIN_IDS is populated, only listed user IDs can interact with the bot.
+    """
 
-    data = await get_admin_list()
-    if data and "admins" in data:
-        _admin_ids = {
-            admin["telegram_id"]
-            for admin in data["admins"]
-            if admin.get("is_active")
-        }
-    _last_refresh = time.monotonic()
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any],
+    ) -> Any:
+        if not ADMIN_IDS:
+            return await handler(event, data)
 
+        user = getattr(event, "from_user", None)
+        if user and user.id in ADMIN_IDS:
+            return await handler(event, data)
 
-async def _ensure_fresh() -> None:
-    if time.monotonic() - _last_refresh > REFRESH_INTERVAL:
-        await refresh_admins()
-
-    
-class IsAdmin(BaseFilter):
-    async def __call__(self, event: Message | CallbackQuery) -> bool:
-        await _ensure_fresh()
-        return event.from_user.id in _admin_ids'''
+        if isinstance(event, Message):
+            await event.answer("⛔ Доступ ограничен. Вы не авторизованы для использования этого бота.")
+        elif isinstance(event, CallbackQuery):
+            await event.answer("⛔ Доступ ограничен", show_alert=True)
+        return None

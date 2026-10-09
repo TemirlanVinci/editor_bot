@@ -108,7 +108,7 @@ pub async fn get_available_backgrounds(pool: &PgPool) -> Result<Vec<String>, App
         return Ok(disk_files);
     }
 
-    Err(AppError::Validation(
+    Err(AppError::Internal(
         "No background videos found. Please add video files (e.g. .mp4) to media/background or media/backgrounds directory.".to_string(),
     ))
 }
@@ -126,7 +126,7 @@ pub async fn get_random_background(pool: &PgPool) -> Result<String, AppError> {
         return Ok(selected);
     }
 
-    Err(AppError::Validation(
+    Err(AppError::Internal(
         "No background videos found. Please add video files (e.g. .mp4) to media/background or media/backgrounds directory.".to_string(),
     ))
 }
@@ -139,7 +139,7 @@ pub async fn prepare_background_sequence(
 ) -> Result<PathBuf, AppError> {
     let available = get_available_backgrounds(pool).await?;
     if available.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::Internal(
             "No background videos found. Please add video files (e.g. .mp4) to media/background or media/backgrounds directory.".to_string(),
         ));
     }
@@ -170,7 +170,7 @@ pub async fn prepare_background_sequence(
                 .copied()
                 .or_else(|| available.choose(&mut rng))
                 .ok_or_else(|| {
-                    AppError::Validation("Failed to pick background video candidate".to_string())
+                    AppError::Internal("Failed to pick background video candidate".to_string())
                 })?
                 .clone()
         };

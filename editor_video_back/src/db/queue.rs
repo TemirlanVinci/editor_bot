@@ -65,9 +65,27 @@ pub async fn insert_queue_item(
     Ok(())
 }
 
+/// Kazakhstan standard time (UTC+5)
+pub fn now_kz() -> NaiveDateTime {
+    (Utc::now() + chrono::Duration::hours(5)).naive_utc()
+}
+
 pub async fn claim_due_task(pool: &PgPool) -> Result<Option<ClaimDueTaskResponse>, AppError> {
     let mut tx = pool.begin().await?;
-    let now = Utc::now().naive_utc();
+    let now = now_kz();
+
+    // Automatically recover tasks stuck in 'uploading' state for over 20 minutes
+    let stuck_cutoff = now - chrono::Duration::minutes(20);
+    let _ = sqlx::query(
+        r#"
+        UPDATE queue
+        SET status = 'pending', error_log = 'Auto-reclaimed after timeout in uploading'
+        WHERE status = 'uploading' AND scheduled_at <= $1;
+        "#,
+    )
+    .bind(stuck_cutoff)
+    .execute(&mut *tx)
+    .await;
 
     let row = sqlx::query(
         r#"
@@ -161,4 +179,22 @@ pub async fn clear_account_queue(pool: &PgPool, account_id: i32) -> Result<Vec<S
 
     let paths = rows.into_iter().map(|r| r.get("file_path")).collect();
     Ok(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_now_kz_offset() {
+        let utc = Utc::now().naive_utc();
+        let kz = now_kz();
+        let diff_secs = (kz - utc).num_seconds();
+        // Difference should be exactly 5 hours (18000 seconds), allow +/- 1 second tolerance for execution
+        assert!(
+            (17999..=18001).contains(&diff_secs),
+            "Expected ~18000 seconds (UTC+5), got {}",
+            diff_secs
+        );
+    }
 }

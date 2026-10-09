@@ -9,7 +9,7 @@ use zip::write::SimpleFileOptions;
 pub async fn create_zip(files: Vec<PathBuf>, output_zip_path: PathBuf) -> Result<(), AppError> {
     tokio::task::spawn_blocking(move || {
         let file = File::create(&output_zip_path)
-            .map_err(|e| AppError::Validation(format!("Failed to create zip file: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to create zip file: {}", e)))?;
 
         let mut zip = ZipWriter::new(file);
         let options =
@@ -19,33 +19,31 @@ pub async fn create_zip(files: Vec<PathBuf>, output_zip_path: PathBuf) -> Result
             let file_name = file_path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .ok_or_else(|| AppError::Validation("Invalid file name".to_string()))?;
+                .ok_or_else(|| AppError::Internal("Invalid file name".to_string()))?;
 
             zip.start_file(file_name, options).map_err(|e| {
-                AppError::Validation(format!("Failed to start zip file {}: {}", file_name, e))
+                AppError::Internal(format!("Failed to start zip file {}: {}", file_name, e))
             })?;
 
-            let mut f = File::open(&file_path).map_err(|e| {
-                AppError::Validation(format!("Failed to open fragment file: {}", e))
-            })?;
+            let mut f = File::open(&file_path)
+                .map_err(|e| AppError::Internal(format!("Failed to open fragment file: {}", e)))?;
 
             let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer).map_err(|e| {
-                AppError::Validation(format!("Failed to read fragment file: {}", e))
-            })?;
+            f.read_to_end(&mut buffer)
+                .map_err(|e| AppError::Internal(format!("Failed to read fragment file: {}", e)))?;
 
             zip.write_all(&buffer).map_err(|e| {
-                AppError::Validation(format!("Failed to write fragment to zip: {}", e))
+                AppError::Internal(format!("Failed to write fragment to zip: {}", e))
             })?;
         }
 
         zip.finish()
-            .map_err(|e| AppError::Validation(format!("Failed to finish zip: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to finish zip: {}", e)))?;
 
         Ok::<(), AppError>(())
     })
     .await
-    .map_err(|e| AppError::Validation(format!("Zip task panicked: {}", e)))??;
+    .map_err(|e| AppError::Internal(format!("Zip task panicked: {}", e)))??;
 
     Ok(())
 }
@@ -89,14 +87,12 @@ pub async fn concat_video_segments(
         .stderr(std::process::Stdio::piped())
         .output()
         .await
-        .map_err(|e| {
-            AppError::Validation(format!("Failed to execute ffmpeg video concat: {}", e))
-        })?;
+        .map_err(|e| AppError::Internal(format!("Failed to execute ffmpeg video concat: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::error!("FFmpeg video concat error: {}", stderr);
-        return Err(AppError::Validation(format!(
+        return Err(AppError::Internal(format!(
             "FFmpeg video concat failed: {}",
             stderr
         )));
@@ -155,7 +151,7 @@ pub async fn process_video(
     let clip_plans = segmentation.build_clip_plans(include_intro);
 
     if clip_plans.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::Internal(
             "No valid stories could be extracted from video transcription".to_string(),
         ));
     }

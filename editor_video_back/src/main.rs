@@ -66,6 +66,16 @@ async fn main() {
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
+    // Фоновая периодическая очистка брошенных папок media/tmp/job_* старше 24 часов
+    let media_var = env::var("MEDIA_DIR").unwrap_or_else(|_| "/app/media".to_string());
+    tokio::spawn(async move {
+        let media_path = std::path::PathBuf::from(media_var);
+        loop {
+            editor_video_back::services::queue::cleanup_old_tmp_jobs(&media_path).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(6 * 3600)).await;
+        }
+    });
+
     // Запуск сервера
     let port: u16 = env::var("PORT")
         .ok()

@@ -28,7 +28,7 @@ pub async fn concat_background_videos(
     output_path: &Path,
 ) -> Result<(), AppError> {
     if files.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::Internal(
             "No background files to concat".to_string(),
         ));
     }
@@ -78,12 +78,12 @@ pub async fn concat_background_videos(
     let output = cmd
         .output()
         .await
-        .map_err(|e| AppError::Validation(format!("Failed to execute ffmpeg concat: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to execute ffmpeg concat: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("FFmpeg concat error: {}", stderr);
-        return Err(AppError::Validation(format!(
+        return Err(AppError::Internal(format!(
             "FFmpeg concat failed: {}",
             stderr
         )));
@@ -169,7 +169,7 @@ pub async fn render_narrative_fragments(
 
         let task = tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.map_err(|e| {
-                AppError::Validation(format!("Failed to acquire semaphore permit: {}", e))
+                AppError::Internal(format!("Failed to acquire semaphore permit: {}", e))
             })?;
 
             info!(
@@ -206,9 +206,9 @@ pub async fn render_narrative_fragments(
 
             let ass_content =
                 subtitles::build_karaoke_ass(&words, bg_width, bg_height, SPEED_FACTOR);
-            fs::write(&ass_path, ass_content).await.map_err(|e| {
-                AppError::Validation(format!("Failed to write subtitle file: {}", e))
-            })?;
+            fs::write(&ass_path, ass_content)
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to write subtitle file: {}", e)))?;
 
             // Изменение 2 и 3: setpts = 1 / 1.08 (0.925926), atempo = 1.08
             // + прожиг караоке-субтитров фильтром ass сразу после setpts.
@@ -269,7 +269,7 @@ pub async fn render_narrative_fragments(
                 .stderr(Stdio::piped())
                 .output()
                 .await
-                .map_err(|e| AppError::Validation(format!("Failed to execute ffmpeg: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Failed to execute ffmpeg: {}", e)))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -277,7 +277,7 @@ pub async fn render_narrative_fragments(
                     "FFmpeg rendering error for fragment {}: {}",
                     fragment_index, stderr
                 );
-                return Err(AppError::Validation(format!(
+                return Err(AppError::Internal(format!(
                     "FFmpeg render failed for fragment {}: {}",
                     fragment_index, stderr
                 )));
@@ -288,7 +288,7 @@ pub async fn render_narrative_fragments(
                     "Failed to remove temporary audio file {:?} for fragment {}: {}",
                     audio_path, fragment_index, e
                 );
-                return Err(AppError::Validation(format!(
+                return Err(AppError::Internal(format!(
                     "Failed to delete temporary audio file: {}",
                     e
                 )));
@@ -325,7 +325,7 @@ pub async fn render_narrative_fragments(
             }
             Err(join_err) => {
                 error!("Render task panicked: {}", join_err);
-                return Err(AppError::Validation(format!(
+                return Err(AppError::Internal(format!(
                     "Render task failed: {}",
                     join_err
                 )));

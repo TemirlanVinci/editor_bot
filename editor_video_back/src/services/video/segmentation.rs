@@ -608,7 +608,8 @@ pub fn validate_and_sanitize_segmentation(
             if let Some(cuts) = candidate_cut_points {
                 let mut min_diff = f64::MAX;
                 for &cut in cuts {
-                    if cut >= cur_start + 45.0 && cut <= cur_start + 110.0 && cut < story_end - 20.0 {
+                    if cut >= cur_start + 45.0 && cut <= cur_start + 110.0 && cut < story_end - 20.0
+                    {
                         let diff = (cut - target_cut).abs();
                         if diff < min_diff {
                             min_diff = diff;
@@ -911,7 +912,8 @@ pub fn refine_intro_boundary_with_transcript(
 
         // Если сегмент заканчивается вопросом '?' или многоточием '...' и имеет паузу после себя
         let trimmed = seg.text.trim();
-        let ends_punct = trimmed.ends_with('?') || trimmed.ends_with("...") || trimmed.ends_with('…');
+        let ends_punct =
+            trimmed.ends_with('?') || trimmed.ends_with("...") || trimmed.ends_with('…');
         if ends_punct && seg.pause_after >= 0.20 && seg.end <= 14.0 && seg.end >= 2.0 {
             detected_intro_end = Some(seg.end);
             if i + 1 < transcript.segments.len() {
@@ -981,10 +983,7 @@ pub fn refine_intro_boundary_with_transcript(
 
 /// Уточняет начало произнесения речи для каждой истории по таймкодам слов Whisper.
 /// Это исключает пустые паузы в начале нарезанных отрезков перед началом речи.
-pub fn refine_story_speech_starts(
-    result: &mut SegmentationResult,
-    transcript: &FullTranscript,
-) {
+pub fn refine_story_speech_starts(result: &mut SegmentationResult, transcript: &FullTranscript) {
     if transcript.words.is_empty() {
         return;
     }
@@ -1740,14 +1739,20 @@ Hope this helps!"#;
         let candidate_cuts = vec![85.0, 160.0, 235.0, 310.0, 385.0, 460.0, 535.0];
         let sanitized = validate_and_sanitize_segmentation(raw, 600.0, Some(&candidate_cuts));
 
-        assert!(sanitized.stories.len() > 1, "Must split long story into multiple parts");
+        assert!(
+            sanitized.stories.len() > 1,
+            "Must split long story into multiple parts"
+        );
         for s in &sanitized.stories {
             let dur = s.end_timestamp - s.start_timestamp;
             assert!(
                 dur <= MAX_STORY_DURATION + 5.0,
                 "Each part duration ({dur:.1}s) must not exceed MAX_STORY_DURATION ({MAX_STORY_DURATION}s)"
             );
-            assert!(s.is_part_of_split, "Split parts must have is_part_of_split = true");
+            assert!(
+                s.is_part_of_split,
+                "Split parts must have is_part_of_split = true"
+            );
         }
         assert_eq!(sanitized.stories[0].start_timestamp, 10.0);
         assert_eq!(sanitized.stories.last().unwrap().end_timestamp, 600.0);
@@ -1779,7 +1784,10 @@ Hope this helps!"#;
             "global_intro must be clamped to <= 25s, got {:.1}s",
             sanitized.global_intro.end_timestamp
         );
-        assert_eq!(sanitized.stories[0].start_timestamp, sanitized.global_intro.end_timestamp);
+        assert_eq!(
+            sanitized.stories[0].start_timestamp,
+            sanitized.global_intro.end_timestamp
+        );
     }
 
     #[test]
@@ -1787,20 +1795,76 @@ Hope this helps!"#;
         let transcript = FullTranscript {
             total_duration: 120.0,
             words: vec![
-                TimedWord { text: "Мудак".into(), start: 0.2, end: 0.8 },
-                TimedWord { text: "ли".into(), start: 0.82, end: 1.0 },
-                TimedWord { text: "я".into(), start: 1.02, end: 1.2 },
-                TimedWord { text: "из-за".into(), start: 1.25, end: 1.6 },
-                TimedWord { text: "того".into(), start: 1.62, end: 1.9 },
-                TimedWord { text: "что".into(), start: 1.92, end: 2.1 },
-                TimedWord { text: "сказал".into(), start: 2.15, end: 2.6 },
-                TimedWord { text: "это".into(), start: 2.62, end: 2.8 },
-                TimedWord { text: "своей".into(), start: 2.82, end: 3.2 },
-                TimedWord { text: "девушке?".into(), start: 3.22, end: 3.8 },
-                TimedWord { text: "Итак,".into(), start: 4.6, end: 5.0 },
-                TimedWord { text: "мне".into(), start: 5.05, end: 5.3 },
-                TimedWord { text: "25".into(), start: 5.35, end: 5.7 },
-                TimedWord { text: "лет.".into(), start: 5.75, end: 6.1 },
+                TimedWord {
+                    text: "Мудак".into(),
+                    start: 0.2,
+                    end: 0.8,
+                },
+                TimedWord {
+                    text: "ли".into(),
+                    start: 0.82,
+                    end: 1.0,
+                },
+                TimedWord {
+                    text: "я".into(),
+                    start: 1.02,
+                    end: 1.2,
+                },
+                TimedWord {
+                    text: "из-за".into(),
+                    start: 1.25,
+                    end: 1.6,
+                },
+                TimedWord {
+                    text: "того".into(),
+                    start: 1.62,
+                    end: 1.9,
+                },
+                TimedWord {
+                    text: "что".into(),
+                    start: 1.92,
+                    end: 2.1,
+                },
+                TimedWord {
+                    text: "сказал".into(),
+                    start: 2.15,
+                    end: 2.6,
+                },
+                TimedWord {
+                    text: "это".into(),
+                    start: 2.62,
+                    end: 2.8,
+                },
+                TimedWord {
+                    text: "своей".into(),
+                    start: 2.82,
+                    end: 3.2,
+                },
+                TimedWord {
+                    text: "девушке?".into(),
+                    start: 3.22,
+                    end: 3.8,
+                },
+                TimedWord {
+                    text: "Итак,".into(),
+                    start: 4.6,
+                    end: 5.0,
+                },
+                TimedWord {
+                    text: "мне".into(),
+                    start: 5.05,
+                    end: 5.3,
+                },
+                TimedWord {
+                    text: "25".into(),
+                    start: 5.35,
+                    end: 5.7,
+                },
+                TimedWord {
+                    text: "лет.".into(),
+                    start: 5.75,
+                    end: 6.1,
+                },
             ],
             segments: vec![
                 TranscriptSegment {
@@ -1847,18 +1911,66 @@ Hope this helps!"#;
         let transcript = FullTranscript {
             total_duration: 100.0,
             words: vec![
-                TimedWord { text: "Случайно".into(), start: 0.1, end: 0.7 },
-                TimedWord { text: "узнал".into(), start: 0.72, end: 1.1 },
-                TimedWord { text: "тайный".into(), start: 1.15, end: 1.6 },
-                TimedWord { text: "секрет".into(), start: 1.65, end: 2.1 },
-                TimedWord { text: "своей".into(), start: 2.12, end: 2.5 },
-                TimedWord { text: "девушки".into(), start: 2.52, end: 3.0 },
-                TimedWord { text: "и...".into(), start: 3.05, end: 3.5 },
-                TimedWord { text: "Всё".into(), start: 4.3, end: 4.6 },
-                TimedWord { text: "началось".into(), start: 4.65, end: 5.2 },
-                TimedWord { text: "в".into(), start: 5.25, end: 5.4 },
-                TimedWord { text: "прошлую".into(), start: 5.45, end: 5.9 },
-                TimedWord { text: "субботу.".into(), start: 5.95, end: 6.5 },
+                TimedWord {
+                    text: "Случайно".into(),
+                    start: 0.1,
+                    end: 0.7,
+                },
+                TimedWord {
+                    text: "узнал".into(),
+                    start: 0.72,
+                    end: 1.1,
+                },
+                TimedWord {
+                    text: "тайный".into(),
+                    start: 1.15,
+                    end: 1.6,
+                },
+                TimedWord {
+                    text: "секрет".into(),
+                    start: 1.65,
+                    end: 2.1,
+                },
+                TimedWord {
+                    text: "своей".into(),
+                    start: 2.12,
+                    end: 2.5,
+                },
+                TimedWord {
+                    text: "девушки".into(),
+                    start: 2.52,
+                    end: 3.0,
+                },
+                TimedWord {
+                    text: "и...".into(),
+                    start: 3.05,
+                    end: 3.5,
+                },
+                TimedWord {
+                    text: "Всё".into(),
+                    start: 4.3,
+                    end: 4.6,
+                },
+                TimedWord {
+                    text: "началось".into(),
+                    start: 4.65,
+                    end: 5.2,
+                },
+                TimedWord {
+                    text: "в".into(),
+                    start: 5.25,
+                    end: 5.4,
+                },
+                TimedWord {
+                    text: "прошлую".into(),
+                    start: 5.45,
+                    end: 5.9,
+                },
+                TimedWord {
+                    text: "субботу.".into(),
+                    start: 5.95,
+                    end: 6.5,
+                },
             ],
             segments: vec![
                 TranscriptSegment {
@@ -1904,19 +2016,71 @@ Hope this helps!"#;
         let transcript = FullTranscript {
             total_duration: 150.0,
             words: vec![
-                TimedWord { text: "Расскажите".into(), start: 0.2, end: 0.9 },
-                TimedWord { text: "о".into(), start: 0.92, end: 1.0 },
-                TimedWord { text: "случаях".into(), start: 1.05, end: 1.6 },
-                TimedWord { text: "когда".into(), start: 1.62, end: 1.9 },
-                TimedWord { text: "вы".into(), start: 1.92, end: 2.1 },
-                TimedWord { text: "чуть".into(), start: 2.15, end: 2.4 },
-                TimedWord { text: "не".into(), start: 2.42, end: 2.6 },
-                TimedWord { text: "уволились.".into(), start: 2.65, end: 3.3 },
-                TimedWord { text: "Первая".into(), start: 4.1, end: 4.6 },
-                TimedWord { text: "история:".into(), start: 4.65, end: 5.2 },
-                TimedWord { text: "Мне".into(), start: 5.25, end: 5.5 },
-                TimedWord { text: "было".into(), start: 5.55, end: 5.8 },
-                TimedWord { text: "19.".into(), start: 5.85, end: 6.2 },
+                TimedWord {
+                    text: "Расскажите".into(),
+                    start: 0.2,
+                    end: 0.9,
+                },
+                TimedWord {
+                    text: "о".into(),
+                    start: 0.92,
+                    end: 1.0,
+                },
+                TimedWord {
+                    text: "случаях".into(),
+                    start: 1.05,
+                    end: 1.6,
+                },
+                TimedWord {
+                    text: "когда".into(),
+                    start: 1.62,
+                    end: 1.9,
+                },
+                TimedWord {
+                    text: "вы".into(),
+                    start: 1.92,
+                    end: 2.1,
+                },
+                TimedWord {
+                    text: "чуть".into(),
+                    start: 2.15,
+                    end: 2.4,
+                },
+                TimedWord {
+                    text: "не".into(),
+                    start: 2.42,
+                    end: 2.6,
+                },
+                TimedWord {
+                    text: "уволились.".into(),
+                    start: 2.65,
+                    end: 3.3,
+                },
+                TimedWord {
+                    text: "Первая".into(),
+                    start: 4.1,
+                    end: 4.6,
+                },
+                TimedWord {
+                    text: "история:".into(),
+                    start: 4.65,
+                    end: 5.2,
+                },
+                TimedWord {
+                    text: "Мне".into(),
+                    start: 5.25,
+                    end: 5.5,
+                },
+                TimedWord {
+                    text: "было".into(),
+                    start: 5.55,
+                    end: 5.8,
+                },
+                TimedWord {
+                    text: "19.".into(),
+                    start: 5.85,
+                    end: 6.2,
+                },
             ],
             segments: vec![
                 TranscriptSegment {
@@ -1957,4 +2121,3 @@ Hope this helps!"#;
         assert_eq!(raw.stories[0].start_timestamp, 4.1);
     }
 }
-

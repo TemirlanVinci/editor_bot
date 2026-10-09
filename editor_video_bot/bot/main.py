@@ -9,9 +9,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.client.session.aiohttp import AiohttpSession
 
-from config import BOT_TOKEN, TELEGRAM_LOCAL_SERVER
+from config import BOT_TOKEN, TELEGRAM_LOCAL_SERVER, ADMIN_IDS
 from api.client import init_session, close_session
 from handlers import admin, cut, download, start, acc, accounts
+from filters import AdminOnlyMiddleware
 from worker import start_worker_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,10 @@ else:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 
 dp = Dispatcher(storage=MemoryStorage())
+
+# Register admin protection middleware
+dp.message.middleware(AdminOnlyMiddleware())
+dp.callback_query.middleware(AdminOnlyMiddleware())
 
 dp.include_router(start.router)
 dp.include_router(admin.router)
