@@ -27,7 +27,7 @@
 - **Async Runtime:** Tokio
 - **Database:** PostgreSQL with SQLx (async queries)
 - **Speech Recognition:** Whisper (GGML C/C++ bindings via whisper-rs)
-- **Narrative Segmentation:** Ollama API (`qwen2.5:3b` / `qwen2.5:7b`)
+- **Narrative Segmentation:** Ollama API (`qwen2.5:3b` / `qwen3.5:9b`)
 - **Video & Audio Processing:** FFmpeg & yt-dlp
 - **Logging:** `tracing` & `tracing-subscriber` (with `EnvFilter`)
 - **Environment:** `dotenvy`

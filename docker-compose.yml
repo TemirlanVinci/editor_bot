@@ -68,7 +68,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 12G
         # Для активации GPU NVIDIA раскомментируйте блок ниже (требуется nvidia-container-toolkit на хосте):
         # reservations:
         #   devices:

@@ -214,7 +214,7 @@ async def cmd_reddit_cut(message: Message, state: FSMContext):
     await state.set_state(CutStates.waiting_for_video)
     await state.update_data(include_intro=True)
     await message.answer(
-        "🎬 <b>Смысловая нарезка видео (Qwen 3 8B)</b>\n\n"
+        "🎬 <b>Смысловая нарезка видео (Qwen 3.5 9B)</b>\n\n"
         "Отправь видеофайл (до 20 МБ) или ссылку на YouTube видео.\n\n"
         "💡 <b>Формат команды:</b>\n"
         "<code>/cut_reddit &lt;ссылка&gt; [yes|no]</code>\n"

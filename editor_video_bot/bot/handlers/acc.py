@@ -38,7 +38,7 @@ async def cmd_reddit_acc(message: Message):
     """
     Handler for command /reddit_acc <url> [yes|no] or /acc <url> [yes|no]
     1. Downloads video from backend endpoint POST /api/v1/video/download
-    2. Cuts video into clips via POST /api/v1/video/cut (Whisper + Qwen 3 8B)
+    2. Cuts video into clips via POST /api/v1/video/cut (Whisper + Qwen 3.5 9B)
     3. Displays inline keyboard to select target TikTok account or cancel
     """
     url, include_intro = parse_cut_args(message.text or "")
@@ -64,8 +64,8 @@ async def cmd_reddit_acc(message: Message):
         # Step 1: Download video (stream directly to disk)
         await download_video_to_file(url, downloaded_path)
 
-        # Step 2: Cut video (Whisper + Qwen 3 8B narrative segmentation)
-        await status_msg.edit_text(f"✂️ Анализ контекста (Whisper + Qwen 3 8B) и нарезка ({mode_desc})...")
+        # Step 2: Cut video (Whisper + Qwen 3.5 9B narrative segmentation)
+        await status_msg.edit_text(f"✂️ Анализ контекста (Whisper + Qwen 3.5 9B) и нарезка ({mode_desc})...")
         await cut_video(downloaded_path, zip_path, include_intro=include_intro)
 
         # Extract ZIP clips
