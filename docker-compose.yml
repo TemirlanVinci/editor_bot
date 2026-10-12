@@ -44,6 +44,9 @@ services:
       LLM_TIMEOUT_SECS: ${LLM_TIMEOUT_SECS:-120}
       LLM_NUM_CTX: ${LLM_NUM_CTX:-8192}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
+      VOICE_SERVICE_URL: ${VOICE_SERVICE_URL:-http://voice_service:8082}
+      ENABLE_VOICE_CONVERSION: ${ENABLE_VOICE_CONVERSION:-true}
+      ENABLE_DEMUCS: ${ENABLE_DEMUCS:-true}
     ports:
       - "127.0.0.1:8081:8081"
     depends_on:
@@ -51,9 +54,34 @@ services:
         condition: service_healthy
       llm:
         condition: service_started
+      voice_service:
+        condition: service_started
     volumes:
       - ./media:/app/media
       - whisper_models:/app/models
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  voice_service:
+    build:
+      context: ./voice_service
+      dockerfile: Dockerfile
+    container_name: editor_voice_service
+    restart: always
+    environment:
+      PORT: 8082
+      MEDIA_DIR: /app/media
+      VOICES_DIR: /app/media/voices
+      DEMUCS_DEVICE: ${DEMUCS_DEVICE:-cpu}
+      COSYVOICE_MODEL_DIR: ${COSYVOICE_MODEL_DIR:-/app/models/CosyVoice-300M}
+    ports:
+      - "127.0.0.1:8082:8082"
+    volumes:
+      - ./media:/app/media
+      - voice_models:/app/models
     logging:
       driver: "json-file"
       options:
@@ -141,3 +169,4 @@ volumes:
   postgres_data:
   ollama_data:
   whisper_models:
+  voice_models:

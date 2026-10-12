@@ -11,3 +11,12 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  voice_service:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

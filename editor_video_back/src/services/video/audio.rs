@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs;
 use tokio::process::Command;
-use tracing::error;
+use tracing::{error, info};
 
 #[derive(Debug, PartialEq)]
 pub struct Interval {
@@ -259,210 +259,362 @@ pub async fn split_audio_by_segments(
     Ok(indexed_files.into_iter().map(|(_, p)| p).collect())
 }
 
+/// Нарезает временной интервал из аудиофайла в отдельный файл (WAV 16-bit PCM).
+pub async fn slice_audio_range(
+    input_path: &Path,
+    output_path: &Path,
+    start: f64,
+    end: f64,
+) -> Result<(), AppError> {
+    let start_str = format!("{:.3}", start);
+    let end_str = format!("{:.3}", end);
+    let output = Command::new("ffmpeg")
+        .stdin(Stdio::null())
+        .args(["-nostdin", "-y"])
+        .args(["-ss", &start_str, "-to", &end_str, "-i"])
+        .arg(input_path)
+        .args(["-vn", "-c:a", "pcm_s16le"])
+        .arg(output_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| AppError::Validation(format!("Failed to execute ffmpeg slice: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!(
+            "FFmpeg audio slice error [{} - {}]: {}",
+            start_str, end_str, stderr
+        );
+        return Err(AppError::Validation(format!(
+            "FFmpeg audio slice failed: {}",
+            stderr
+        )));
+    }
+    Ok(())
+}
+
+/// Склеивает несколько аудиофайлов по порядку в один целевой файл.
+pub async fn concat_audio_files(inputs: &[PathBuf], output_path: &Path) -> Result<(), AppError> {
+    if inputs.is_empty() {
+        return Err(AppError::Validation(
+            "No audio inputs to concatenate".to_string(),
+        ));
+    }
+    if inputs.len() == 1 {
+        tokio::fs::copy(&inputs[0], output_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to copy single audio file: {}", e)))?;
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.stdin(Stdio::null()).args(["-nostdin", "-y"]);
+
+    for file in inputs {
+        cmd.args(["-i"]).arg(file);
+    }
+
+    let mut filter = String::new();
+    for i in 0..inputs.len() {
+        filter.push_str(&format!("[{}:a]", i));
+    }
+    filter.push_str(&format!("concat=n={}:v=0:a=1[outa]", inputs.len()));
+
+    cmd.args(["-filter_complex", &filter, "-map", "[outa]"]);
+
+    if output_path.extension().and_then(|s| s.to_str()) == Some("m4a") {
+        cmd.args(["-c:a", "aac"]);
+    } else {
+        cmd.args(["-c:a", "pcm_s16le"]);
+    }
+    cmd.arg(output_path);
+
+    let output = cmd
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| {
+            AppError::Validation(format!("Failed to execute ffmpeg audio concat: {}", e))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("FFmpeg concat_audio_files error: {}", stderr);
+        return Err(AppError::Validation(format!(
+            "FFmpeg concat_audio_files failed: {}",
+            stderr
+        )));
+    }
+
+    Ok(())
+}
+
+/// Обрабатывает и переозвучивает аудиодорожку истории (учитывая возможные подсегменты с разными голосами).
+pub async fn process_story_audio(
+    source_audio_path: &Path,
+    story: &crate::services::video::segmentation::StorySegment,
+    clip_index: usize,
+    temp_dir: &Path,
+) -> Result<PathBuf, AppError> {
+    let enable_demucs = crate::services::video::voice::is_demucs_enabled();
+
+    // Если нет подсегментов со сменой голосов, обрабатываем историю целиком
+    if story.voice_segments.is_empty() {
+        let raw_chunk = temp_dir.join(format!("story_raw_{:03}.wav", clip_index));
+        let converted_chunk = temp_dir.join(format!("story_conv_{:03}.wav", clip_index));
+
+        slice_audio_range(
+            source_audio_path,
+            &raw_chunk,
+            story.start_timestamp,
+            story.end_timestamp,
+        )
+        .await?;
+
+        let res_path = crate::services::video::voice::convert_voice(
+            &raw_chunk,
+            &converted_chunk,
+            &story.voice,
+            enable_demucs,
+        )
+        .await?;
+
+        let _ = tokio::fs::remove_file(&raw_chunk).await;
+        return Ok(res_path);
+    }
+
+    // Если есть подсегменты со сменой голосов:
+    // Разделяем историю на непрерывные хронологические отрезки, сохраняя тайминги
+    let mut intervals: Vec<(f64, f64, String)> = Vec::new();
+    let mut cursor = story.start_timestamp;
+
+    for sub in &story.voice_segments {
+        if sub.start_timestamp > cursor + 0.05 {
+            intervals.push((cursor, sub.start_timestamp, story.voice.clone()));
+        }
+        let sub_end = sub.end_timestamp.min(story.end_timestamp);
+        if sub_end > sub.start_timestamp + 0.05 {
+            intervals.push((sub.start_timestamp, sub_end, sub.voice.clone()));
+        }
+        cursor = sub_end;
+    }
+
+    if cursor < story.end_timestamp - 0.05 {
+        intervals.push((cursor, story.end_timestamp, story.voice.clone()));
+    }
+
+    let mut converted_parts = Vec::with_capacity(intervals.len());
+    for (part_idx, (start, end, voice_name)) in intervals.into_iter().enumerate() {
+        let raw_part = temp_dir.join(format!(
+            "story_sub_raw_{:03}_{:02}.wav",
+            clip_index, part_idx
+        ));
+        let conv_part = temp_dir.join(format!(
+            "story_sub_conv_{:03}_{:02}.wav",
+            clip_index, part_idx
+        ));
+
+        slice_audio_range(source_audio_path, &raw_part, start, end).await?;
+
+        let conv_path = crate::services::video::voice::convert_voice(
+            &raw_part,
+            &conv_part,
+            &voice_name,
+            enable_demucs,
+        )
+        .await?;
+
+        let _ = tokio::fs::remove_file(&raw_part).await;
+        converted_parts.push(conv_path);
+    }
+
+    let story_final = temp_dir.join(format!("story_assembled_{:03}.wav", clip_index));
+    concat_audio_files(&converted_parts, &story_final).await?;
+
+    for part in converted_parts {
+        let _ = tokio::fs::remove_file(part).await;
+    }
+
+    Ok(story_final)
+}
+
 /// Нарезает и склеивает аудиодорожки для каждого клипа: [Отрезок А: Global Intro] + [Отрезок Б: Story]
-/// с использованием FFmpeg filter_complex concat ([0:a][1:a]concat=n=2:v=0:a=1[outa])
-/// для устранения любого рассинхрона между вступительным вопросом и телом истории.
+/// с переозвучкой через CosyVoice 3 (и очисткой Demucs v4 при необходимости)
+/// и бесшовной склейкой с сохранением точных таймкодов караоке-субтитров.
 pub async fn prepare_clip_audio_tracks(
     source_audio_path: &Path,
     clip_plans: &[crate::services::video::segmentation::ClipPlan],
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>, AppError> {
-    tracing::info!(
-        "🎵 Assembling {} clip audio track(s) with seamless intro hook...",
+    info!(
+        "🎵 Assembling {} clip audio track(s) with voice conversion & seamless intro hook...",
         clip_plans.len()
     );
 
-    let mut tasks = Vec::with_capacity(clip_plans.len());
+    let enable_demucs = crate::services::video::voice::is_demucs_enabled();
+    let pause_dur = crate::services::video::segmentation::intro_pause_duration();
+    let mut generated_paths = Vec::with_capacity(clip_plans.len());
 
-    for (index, plan) in clip_plans.iter().enumerate() {
-        let filename = format!("audio_fragment_{:03}.m4a", plan.clip_index);
-        let output_path = output_dir.join(&filename);
-        let input_path = source_audio_path.to_path_buf();
-        let intro_val = plan
-            .intro
-            .as_ref()
-            .ok_or_else(|| AppError::Validation("Clip plan missing intro".to_string()))?;
-        let intro_start = format!("{:.3}", intro_val.start_timestamp);
-        let intro_end = format!("{:.3}", intro_val.end_timestamp);
-        let story_start = format!("{:.3}", plan.story.start_timestamp);
-        let story_end = format!("{:.3}", plan.story.end_timestamp);
+    for plan in clip_plans {
         let clip_idx = plan.clip_index;
+        let filename = format!("audio_fragment_{:03}.m4a", clip_idx);
+        let output_path = output_dir.join(&filename);
 
-        let task = tokio::spawn(async move {
-            let start_time = std::time::Instant::now();
-            let pause_dur = crate::services::video::segmentation::intro_pause_duration();
-            let filter_complex = if pause_dur > 0.0 {
-                format!(
-                    "[0:a]apad=pad_dur={pad:.3}[a0];[a0][1:a]concat=n=2:v=0:a=1[outa]",
-                    pad = pause_dur
-                )
-            } else {
-                "[0:a][1:a]concat=n=2:v=0:a=1[outa]".to_string()
-            };
+        let intro_val = plan.intro.as_ref().ok_or_else(|| {
+            AppError::Validation(format!("Clip #{} plan missing intro", clip_idx))
+        })?;
 
-            let output = Command::new("ffmpeg")
-                .stdin(Stdio::null())
-                .args(["-nostdin", "-y"])
-                .args(["-ss", &intro_start, "-to", &intro_end, "-i"])
-                .arg(&input_path)
-                .args(["-ss", &story_start, "-to", &story_end, "-i"])
-                .arg(&input_path)
-                .args([
-                    "-filter_complex",
-                    &filter_complex,
-                    "-map",
-                    "[outa]",
-                    "-c:a",
-                    "aac",
-                ])
-                .arg(&output_path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-                .map_err(|e| {
-                    AppError::Validation(format!("Failed to execute ffmpeg concat audio: {}", e))
-                })?;
+        let intro_voice = intro_val.voice.as_deref().unwrap_or("male_adult");
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                error!(
-                    "FFmpeg audio concat error for clip #{}: {}",
-                    clip_idx, stderr
-                );
-                return Err(AppError::Validation(format!(
-                    "FFmpeg audio concat failed for clip #{}: {}",
-                    clip_idx, stderr
-                )));
-            }
+        // 1. Срез и переозвучка intro
+        let intro_raw = output_dir.join(format!("intro_raw_{:03}.wav", clip_idx));
+        let intro_conv = output_dir.join(format!("intro_conv_{:03}.wav", clip_idx));
 
-            tracing::info!(
-                "✅ Seamless clip audio #{} [intro: {}-{}s + story: {}-{}s] assembled in {:.2}s",
-                clip_idx,
-                intro_start,
-                intro_end,
-                story_start,
-                story_end,
-                start_time.elapsed().as_secs_f32()
+        slice_audio_range(
+            source_audio_path,
+            &intro_raw,
+            intro_val.start_timestamp,
+            intro_val.end_timestamp,
+        )
+        .await?;
+
+        let conv_intro_path = crate::services::video::voice::convert_voice(
+            &intro_raw,
+            &intro_conv,
+            intro_voice,
+            enable_demucs,
+        )
+        .await?;
+
+        let _ = tokio::fs::remove_file(&intro_raw).await;
+
+        // 2. Срез и переозвучка story (с поддержкой подсегментов)
+        let conv_story_path =
+            process_story_audio(source_audio_path, &plan.story, clip_idx, output_dir).await?;
+
+        // 3. Бесшовная склейка intro + pause + story
+        let filter_complex = if pause_dur > 0.0 {
+            format!(
+                "[0:a]apad=pad_dur={pad:.3}[a0];[a0][1:a]concat=n=2:v=0:a=1[outa]",
+                pad = pause_dur
+            )
+        } else {
+            "[0:a][1:a]concat=n=2:v=0:a=1[outa]".to_string()
+        };
+
+        let output = Command::new("ffmpeg")
+            .stdin(Stdio::null())
+            .args(["-nostdin", "-y"])
+            .args(["-i"])
+            .arg(&conv_intro_path)
+            .args(["-i"])
+            .arg(&conv_story_path)
+            .args([
+                "-filter_complex",
+                &filter_complex,
+                "-map",
+                "[outa]",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&output_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| {
+                AppError::Validation(format!("Failed to execute ffmpeg concat audio: {}", e))
+            })?;
+
+        let _ = tokio::fs::remove_file(&conv_intro_path).await;
+        let _ = tokio::fs::remove_file(&conv_story_path).await;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(
+                "FFmpeg audio concat error for clip #{}: {}",
+                clip_idx, stderr
             );
-
-            Ok((index, output_path))
-        });
-
-        tasks.push(task);
-    }
-
-    let results = join_all(tasks).await;
-    let mut indexed_files = Vec::with_capacity(results.len());
-
-    for result in results {
-        match result {
-            Ok(Ok((index, path))) => {
-                indexed_files.push((index, path));
-            }
-            Ok(Err(err)) => return Err(err),
-            Err(join_err) => {
-                error!("Audio assembling task panicked: {}", join_err);
-                return Err(AppError::Validation(format!(
-                    "Audio assembling task panicked: {}",
-                    join_err
-                )));
-            }
+            return Err(AppError::Validation(format!(
+                "FFmpeg audio concat failed for clip #{}: {}",
+                clip_idx, stderr
+            )));
         }
+
+        info!(
+            "✅ Seamless clip audio #{} assembled and voice-converted successfully",
+            clip_idx
+        );
+
+        generated_paths.push(output_path);
     }
 
-    indexed_files.sort_by_key(|(idx, _)| *idx);
-    Ok(indexed_files.into_iter().map(|(_, p)| p).collect())
+    Ok(generated_paths)
 }
 
-/// Нарезает аудиодорожки напрямую по границам историй без конкатенации intro (режим include_intro = false).
+/// Нарезает аудиодорожки напрямую по границам историй без конкатенации intro (режим include_intro = false),
+/// с поддержкой смены голосов (Demucs v4 + CosyVoice 3).
 pub async fn prepare_story_audio_tracks(
     source_audio_path: &Path,
     clip_plans: &[crate::services::video::segmentation::ClipPlan],
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>, AppError> {
-    tracing::info!(
-        "🎵 Slicing {} story audio track(s) without intro hook...",
+    info!(
+        "🎵 Slicing {} story audio track(s) with voice conversion (no intro)...",
         clip_plans.len()
     );
 
-    let mut tasks = Vec::with_capacity(clip_plans.len());
+    let mut generated_paths = Vec::with_capacity(clip_plans.len());
 
-    for (index, plan) in clip_plans.iter().enumerate() {
-        let filename = format!("audio_fragment_{:03}.m4a", plan.clip_index);
-        let output_path = output_dir.join(&filename);
-        let input_path = source_audio_path.to_path_buf();
-        let story_start = format!("{:.3}", plan.story.start_timestamp);
-        let story_end = format!("{:.3}", plan.story.end_timestamp);
+    for plan in clip_plans {
         let clip_idx = plan.clip_index;
+        let filename = format!("audio_fragment_{:03}.m4a", clip_idx);
+        let output_path = output_dir.join(&filename);
 
-        let task = tokio::spawn(async move {
-            let start_time = std::time::Instant::now();
-            let output = Command::new("ffmpeg")
-                .stdin(Stdio::null())
-                .args(["-nostdin", "-y"])
-                .args(["-ss", &story_start, "-to", &story_end, "-i"])
-                .arg(&input_path)
-                .args(["-vn", "-c:a", "aac"])
-                .arg(&output_path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-                .map_err(|e| {
-                    AppError::Validation(format!(
-                        "Failed to execute ffmpeg story audio slice: {}",
-                        e
-                    ))
-                })?;
+        let conv_story_path =
+            process_story_audio(source_audio_path, &plan.story, clip_idx, output_dir).await?;
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                error!(
-                    "FFmpeg story audio slice error for clip #{}: {}",
-                    clip_idx, stderr
-                );
-                return Err(AppError::Validation(format!(
-                    "FFmpeg story audio slice failed for clip #{}: {}",
-                    clip_idx, stderr
-                )));
-            }
+        let output = Command::new("ffmpeg")
+            .stdin(Stdio::null())
+            .args(["-nostdin", "-y"])
+            .args(["-i"])
+            .arg(&conv_story_path)
+            .args(["-vn", "-c:a", "aac"])
+            .arg(&output_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| {
+                AppError::Validation(format!("Failed to encode story audio to aac: {}", e))
+            })?;
 
-            tracing::info!(
-                "✅ Story audio slice #{} [{}-{}s] completed in {:.2}s",
-                clip_idx,
-                story_start,
-                story_end,
-                start_time.elapsed().as_secs_f32()
+        let _ = tokio::fs::remove_file(&conv_story_path).await;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(
+                "FFmpeg story audio encode error for clip #{}: {}",
+                clip_idx, stderr
             );
-
-            Ok((index, output_path))
-        });
-
-        tasks.push(task);
-    }
-
-    let results = join_all(tasks).await;
-    let mut indexed_files = Vec::with_capacity(results.len());
-
-    for result in results {
-        match result {
-            Ok(Ok((index, path))) => {
-                indexed_files.push((index, path));
-            }
-            Ok(Err(err)) => return Err(err),
-            Err(join_err) => {
-                error!("Story audio slicing task panicked: {}", join_err);
-                return Err(AppError::Validation(format!(
-                    "Story audio slicing task panicked: {}",
-                    join_err
-                )));
-            }
+            return Err(AppError::Validation(format!(
+                "FFmpeg story audio encode failed for clip #{}: {}",
+                clip_idx, stderr
+            )));
         }
+
+        info!(
+            "✅ Story audio track #{} completed with voice conversion",
+            clip_idx
+        );
+
+        generated_paths.push(output_path);
     }
 
-    indexed_files.sort_by_key(|(idx, _)| *idx);
-    Ok(indexed_files.into_iter().map(|(_, p)| p).collect())
+    Ok(generated_paths)
 }
 
 pub async fn extract_and_split_audio(

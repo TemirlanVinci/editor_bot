@@ -14,6 +14,27 @@ pub struct GlobalIntro {
     pub end_timestamp: f64,
     /// Заголовок или текст заглавного вопроса
     pub title: String,
+    /// Целевой голос диктора для переозвучки CosyVoice 3
+    #[serde(default)]
+    pub voice: Option<String>,
+}
+
+pub fn default_voice() -> String {
+    "male_young".to_string()
+}
+
+/// Подсегмент с назначенным голосом (когда внутри одной истории/клипа говорят разные персонажи).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceSegment {
+    /// Начало реплики/подсегмента в секундах
+    pub start_timestamp: f64,
+    /// Конец реплики/подсегмента в секундах
+    pub end_timestamp: f64,
+    /// Целевой голос ("male_adult", "male_young", "female_adult", "female_young")
+    pub voice: String,
+    /// Опциональное имя говорящего ("narrator", "op", "friend" и т.д.)
+    #[serde(default)]
+    pub speaker: Option<String>,
 }
 
 /// Отдельная история из видео.
@@ -29,6 +50,12 @@ pub struct StorySegment {
     pub title: String,
     /// Флаг, если длинная история была разделена на Part 1 / Part 2
     pub is_part_of_split: bool,
+    /// Голос для озвучки всей истории в CosyVoice 3 ("male_adult", "male_young", "female_adult", "female_young")
+    #[serde(default = "default_voice")]
+    pub voice: String,
+    /// Опциональные подсегменты со сменой голосов персонажей внутри одной истории
+    #[serde(default)]
+    pub voice_segments: Vec<VoiceSegment>,
 }
 
 /// Нарративный сегмент видео (для обратной совместимости с очередью и ботом).
@@ -43,6 +70,9 @@ pub struct NarrativeSegment {
     pub start_timestamp: f64,
     /// Конец сегмента в секундах
     pub end_timestamp: f64,
+    /// Назначенный голос для публикации/метаданных
+    #[serde(default)]
+    pub voice: Option<String>,
 }
 
 /// План монтажа готового клипа: Интро-заголовок (Hook) + Тело истории (если include_intro = true),
@@ -94,6 +124,7 @@ impl SegmentationResult {
                 title: s.title.clone(),
                 start_timestamp: s.start_timestamp,
                 end_timestamp: s.end_timestamp,
+                voice: Some(s.voice.clone()),
             })
             .collect();
     }
@@ -193,7 +224,11 @@ pub fn segmentation_json_schema() -> serde_json::Value {
                 "properties": {
                     "start_timestamp": { "type": "number" },
                     "end_timestamp": { "type": "number" },
-                    "title": { "type": "string" }
+                    "title": { "type": "string" },
+                    "voice": {
+                        "type": "string",
+                        "enum": ["male_adult", "male_young", "female_adult", "female_young"]
+                    }
                 },
                 "required": ["start_timestamp", "end_timestamp", "title"]
             },
@@ -206,9 +241,28 @@ pub fn segmentation_json_schema() -> serde_json::Value {
                         "start_timestamp": { "type": "number" },
                         "end_timestamp": { "type": "number" },
                         "title": { "type": "string" },
-                        "is_part_of_split": { "type": "boolean" }
+                        "is_part_of_split": { "type": "boolean" },
+                        "voice": {
+                            "type": "string",
+                            "enum": ["male_adult", "male_young", "female_adult", "female_young"]
+                        },
+                        "voice_segments": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start_timestamp": { "type": "number" },
+                                    "end_timestamp": { "type": "number" },
+                                    "voice": {
+                                        "type": "string",
+                                        "enum": ["male_adult", "male_young", "female_adult", "female_young"]
+                                    }
+                                },
+                                "required": ["start_timestamp", "end_timestamp", "voice"]
+                            }
+                        }
                     },
-                    "required": ["story_id", "start_timestamp", "end_timestamp", "title", "is_part_of_split"]
+                    "required": ["story_id", "start_timestamp", "end_timestamp", "title", "is_part_of_split", "voice"]
                 }
             }
         },
@@ -219,7 +273,7 @@ pub fn segmentation_json_schema() -> serde_json::Value {
 /// Системный промпт для семантической нарезки видео.
 pub fn build_system_prompt() -> &'static str {
     r#"You are an expert video editor and narrative analyzer specializing in short-form content (TikTok, YouTube Shorts, Reels) for Reddit narration stories.
-Your task is to analyze the provided video transcript with sentence timestamps and speech pauses, then segment the video into a global question/hook intro and standalone stories.
+Your task is to analyze the provided video transcript with sentence timestamps and speech pauses, then segment the video into a global question/hook intro and standalone stories, assigning voice profiles for AI voice conversion.
 
 Target Structure:
 1. `global_intro` (Reddit Post Title / Opening Hook Header):
@@ -242,6 +296,16 @@ Target Structure:
    - Do NOT cut mid-sentence! The end timestamp must correspond to a natural speech pause after the resolution/climax.
    - The first story starts immediately where the narrator starts telling the story (strictly at or right after `global_intro.end_timestamp`).
 
+3. `voice` & `voice_segments` (CosyVoice 3 Voice Profiles):
+   - Select the most fitting narrator voice for each story from:
+     * "male_young": young man / guy / student (16-24 yo).
+     * "male_adult": adult man / husband / father / mature narrator (25+ yo).
+     * "female_young": young woman / girl / student (16-24 yo).
+     * "female_adult": adult woman / wife / mother / mature narrator (25+ yo).
+   - Infer gender & age from narrative context (e.g., "Я парень...", "Мне 38 лет...", past tense verbs in Russian "сказал/сказала").
+   - If gender is unspecified, alternate voices between stories so consecutive stories have distinct voices!
+   - If a clip contains multiple mini-stories or comments from different speakers, specify them in `voice_segments`. Otherwise set `voice_segments: []`.
+
 Critical Timestamp Rules:
 - Choose timestamps grounded in the provided transcript lines: `[start - end] (pause: ...)`.
 - Stories must be chronological and continuous without overlapping.
@@ -259,7 +323,8 @@ Output:
   "global_intro": {
     "start_timestamp": 0.0,
     "end_timestamp": 4.5,
-    "title": "Мудак ли я из-за того что сказал это девушке?"
+    "title": "Мудак ли я из-за того что сказал это девушке?",
+    "voice": "male_adult"
   },
   "stories": [
     {
@@ -267,14 +332,18 @@ Output:
       "start_timestamp": 5.3,
       "end_timestamp": 78.4,
       "title": "Ссора с девушкой (Part 1)",
-      "is_part_of_split": true
+      "is_part_of_split": true,
+      "voice": "male_adult",
+      "voice_segments": []
     },
     {
       "story_id": 2,
       "start_timestamp": 79.4,
       "end_timestamp": 148.0,
       "title": "Она собрала вещи (Part 2)",
-      "is_part_of_split": true
+      "is_part_of_split": true,
+      "voice": "male_adult",
+      "voice_segments": []
     }
   ]
 }
@@ -283,7 +352,7 @@ Example 2 (AskReddit Multiple Stories):
 Transcript:
 [0.00s - 5.20s] (pause: 0.90s) Расскажите о самых странных случаях на вашей первой работе.
 [6.10s - 75.30s] (pause: 1.10s) Первая история: Когда мне было 18, я устроился ночным сторожем на склад старой мебели...
-[76.40s - 150.00s] (pause: 0.00s) Вторая история: Моя первая работа была баристой в крошечной кофейне на вокзале...
+[76.40s - 150.00s] (pause: 0.00s) Вторая история: Моя первая работа была баристой в крошечной кофейне на вокзале, мне было 20 лет, я девушка...
 Total Video Duration: 150.00s
 
 Output:
@@ -291,7 +360,8 @@ Output:
   "global_intro": {
     "start_timestamp": 0.0,
     "end_timestamp": 5.2,
-    "title": "Странные случаи на первой работе"
+    "title": "Странные случаи на первой работе",
+    "voice": "male_adult"
   },
   "stories": [
     {
@@ -299,14 +369,18 @@ Output:
       "start_timestamp": 6.1,
       "end_timestamp": 75.3,
       "title": "Ночной сторож на складе",
-      "is_part_of_split": false
+      "is_part_of_split": false,
+      "voice": "male_young",
+      "voice_segments": []
     },
     {
       "story_id": 2,
       "start_timestamp": 76.4,
       "end_timestamp": 150.0,
       "title": "Бариста в кофейне на вокзале",
-      "is_part_of_split": false
+      "is_part_of_split": false,
+      "voice": "female_young",
+      "voice_segments": []
     }
   ]
 }"#
@@ -371,6 +445,7 @@ pub fn parse_llm_json(raw_text: &str) -> Result<SegmentationResult, String> {
                         title: s.title.clone(),
                         start_timestamp: s.start_timestamp,
                         end_timestamp: s.end_timestamp,
+                        voice: Some(s.voice.clone()),
                     })
                     .collect();
             }
@@ -389,6 +464,7 @@ pub fn parse_llm_json(raw_text: &str) -> Result<SegmentationResult, String> {
                 start_timestamp: first.start_timestamp,
                 end_timestamp: first.end_timestamp,
                 title: first.title.clone(),
+                voice: None,
             };
             let stories = segments[1..]
                 .iter()
@@ -399,8 +475,11 @@ pub fn parse_llm_json(raw_text: &str) -> Result<SegmentationResult, String> {
                     end_timestamp: s.end_timestamp,
                     title: s.title.clone(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 })
                 .collect();
+
             let mut res = SegmentationResult {
                 global_intro,
                 stories,
@@ -485,6 +564,8 @@ pub fn validate_and_sanitize_segmentation(
             end_timestamp: total_duration,
             title: "Story 1".to_string(),
             is_part_of_split: false,
+            voice: default_voice(),
+            voice_segments: Vec::new(),
         });
     }
 
@@ -598,6 +679,8 @@ pub fn validate_and_sanitize_segmentation(
                     end_timestamp: story_end,
                     title,
                     is_part_of_split: part_num > 1 || story.is_part_of_split,
+                    voice: story.voice.clone(),
+                    voice_segments: story.voice_segments.clone(),
                 });
                 break;
             }
@@ -629,6 +712,8 @@ pub fn validate_and_sanitize_segmentation(
                 end_timestamp: best_cut,
                 title: format!("{} (Part {})", base_title, part_num),
                 is_part_of_split: true,
+                voice: story.voice.clone(),
+                voice_segments: story.voice_segments.clone(),
             });
 
             cur_start = best_cut;
@@ -644,6 +729,8 @@ pub fn validate_and_sanitize_segmentation(
             end_timestamp: total_duration,
             title: "Story 1".to_string(),
             is_part_of_split: false,
+            voice: default_voice(),
+            voice_segments: Vec::new(),
         });
     }
 
@@ -679,6 +766,7 @@ pub fn validate_and_sanitize_segments_with_snapping(
             title: "Full Story".to_string(),
             start_timestamp: 0.0,
             end_timestamp: total_duration.max(1.0),
+            voice: None,
         }];
     }
 
@@ -757,6 +845,7 @@ pub fn validate_and_sanitize_segments_with_snapping(
             title: "Full Story".to_string(),
             start_timestamp: 0.0,
             end_timestamp: total_duration,
+            voice: None,
         });
     }
 
@@ -1015,6 +1104,7 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
                 start_timestamp: 0.0,
                 end_timestamp: (total_duration * 0.05).clamp(3.5, 8.0).min(total_duration),
                 title: "Opening Question".to_string(),
+                voice: None,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -1022,6 +1112,8 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
                 end_timestamp: total_duration,
                 title: "Story Part 1".to_string(),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
         };
@@ -1040,6 +1132,7 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
             start_timestamp: 0.0,
             end_timestamp: hook_end,
             title: hook_title,
+            voice: None,
         },
         stories: Vec::new(),
         segments: Vec::new(),
@@ -1060,6 +1153,8 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
             end_timestamp: total_duration,
             title: "Story 1".to_string(),
             is_part_of_split: false,
+            voice: default_voice(),
+            voice_segments: Vec::new(),
         });
     } else {
         let mut story_start = hook_end;
@@ -1074,6 +1169,8 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
                     end_timestamp: total_duration,
                     title: format!("Story Part {story_idx}"),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 });
                 break;
             }
@@ -1103,6 +1200,8 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
                 end_timestamp: best_cut,
                 title: format!("Story Part {story_idx}"),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             });
 
             story_start = best_cut;
@@ -1422,6 +1521,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 10.0,
                 title: "Intro Question".into(),
+                voice: None,
             },
             stories: vec![
                 StorySegment {
@@ -1430,6 +1530,8 @@ Hope this helps!"#;
                     end_timestamp: 60.0,
                     title: "Story 1".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
                 StorySegment {
                     story_id: 2,
@@ -1437,6 +1539,8 @@ Hope this helps!"#;
                     end_timestamp: 120.0,
                     title: "Story 2".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
             ],
             segments: Vec::new(),
@@ -1464,6 +1568,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 10.0,
                 title: "Intro".into(),
+                voice: None,
             },
             stories: vec![
                 StorySegment {
@@ -1472,6 +1577,8 @@ Hope this helps!"#;
                     end_timestamp: 25.0,
                     title: "Short Comment 1".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
                 StorySegment {
                     story_id: 2,
@@ -1479,6 +1586,8 @@ Hope this helps!"#;
                     end_timestamp: 90.0,
                     title: "Main Story".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
             ],
             segments: Vec::new(),
@@ -1501,6 +1610,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 10.0,
                 title: "Intro".into(),
+                voice: None,
             },
             stories: vec![
                 StorySegment {
@@ -1509,6 +1619,8 @@ Hope this helps!"#;
                     end_timestamp: 70.0,
                     title: "First Long Story".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
                 StorySegment {
                     story_id: 2,
@@ -1516,6 +1628,8 @@ Hope this helps!"#;
                     end_timestamp: 85.0,
                     title: "Trailing Short Remark".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
             ],
             segments: Vec::new(),
@@ -1534,6 +1648,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 7.2, // Hallucinated, real whisper pause is at 6.8
                 title: "Intro".into(),
+                voice: None,
             },
             stories: vec![
                 StorySegment {
@@ -1542,6 +1657,8 @@ Hope this helps!"#;
                     end_timestamp: 58.2, // Hallucinated, real whisper pause is at 60.0
                     title: "Story 1".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
                 StorySegment {
                     story_id: 2,
@@ -1549,6 +1666,8 @@ Hope this helps!"#;
                     end_timestamp: 115.0,
                     title: "Story 2".into(),
                     is_part_of_split: false,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
             ],
             segments: Vec::new(),
@@ -1570,6 +1689,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 8.0,
                 title: "Reddit Question".into(),
+                voice: None,
             },
             stories: vec![
                 StorySegment {
@@ -1578,6 +1698,8 @@ Hope this helps!"#;
                     end_timestamp: 70.0,
                     title: "Story Part 1".into(),
                     is_part_of_split: true,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
                 StorySegment {
                     story_id: 2,
@@ -1585,6 +1707,8 @@ Hope this helps!"#;
                     end_timestamp: 130.0,
                     title: "Story Part 2".into(),
                     is_part_of_split: true,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
             ],
             segments: Vec::new(),
@@ -1608,6 +1732,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 8.0,
                 title: "Reddit Question".into(),
+                voice: None,
             },
             stories: vec![
                 StorySegment {
@@ -1616,6 +1741,8 @@ Hope this helps!"#;
                     end_timestamp: 70.0,
                     title: "Story Part 1".into(),
                     is_part_of_split: true,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
                 StorySegment {
                     story_id: 2,
@@ -1623,6 +1750,8 @@ Hope this helps!"#;
                     end_timestamp: 130.0,
                     title: "Story Part 2".into(),
                     is_part_of_split: true,
+                    voice: default_voice(),
+                    voice_segments: Vec::new(),
                 },
             ],
             segments: Vec::new(),
@@ -1699,6 +1828,7 @@ Hope this helps!"#;
                 title: "Hook".into(),
                 start_timestamp: 1.0,
                 end_timestamp: 8.0,
+                voice: None,
             },
             NarrativeSegment {
                 segment_id: 2,
@@ -1706,6 +1836,7 @@ Hope this helps!"#;
                 title: "Story".into(),
                 start_timestamp: 10.0,
                 end_timestamp: 50.0,
+                voice: None,
             },
         ];
 
@@ -1725,6 +1856,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 10.0,
                 title: "Intro Question".into(),
+                voice: None,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -1732,6 +1864,8 @@ Hope this helps!"#;
                 end_timestamp: 600.0,
                 title: "One Giant Story".into(),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
         };
@@ -1766,6 +1900,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 84.4,
                 title: "AskReddit Question".into(),
+                voice: None,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -1773,6 +1908,8 @@ Hope this helps!"#;
                 end_timestamp: 300.0,
                 title: "Story".into(),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
         };
@@ -1890,6 +2027,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 15.0,
                 title: "Мудак ли я".into(),
+                voice: None,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -1897,6 +2035,8 @@ Hope this helps!"#;
                 end_timestamp: 120.0,
                 title: "Story".into(),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
         };
@@ -1995,6 +2135,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 18.0,
                 title: "Секрет девушки".into(),
+                voice: None,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -2002,6 +2143,8 @@ Hope this helps!"#;
                 end_timestamp: 100.0,
                 title: "Story".into(),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
         };
@@ -2105,6 +2248,7 @@ Hope this helps!"#;
                 start_timestamp: 0.0,
                 end_timestamp: 20.0,
                 title: "Истории с работы".into(),
+                voice: None,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -2112,6 +2256,8 @@ Hope this helps!"#;
                 end_timestamp: 150.0,
                 title: "Story".into(),
                 is_part_of_split: false,
+                voice: default_voice(),
+                voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
         };
@@ -2119,5 +2265,49 @@ Hope this helps!"#;
         refine_intro_boundary_with_transcript(&mut raw, &transcript);
         assert_eq!(raw.global_intro.end_timestamp, 3.3);
         assert_eq!(raw.stories[0].start_timestamp, 4.1);
+    }
+
+    #[test]
+    fn test_parse_llm_json_with_voices_and_voice_segments() {
+        let json = r#"{
+            "global_intro": {
+                "start_timestamp": 0.0,
+                "end_timestamp": 6.5,
+                "title": "AITA for leaving?",
+                "voice": "male_adult"
+            },
+            "stories": [
+                {
+                    "story_id": 1,
+                    "start_timestamp": 6.5,
+                    "end_timestamp": 85.0,
+                    "title": "Family Discussion",
+                    "is_part_of_split": false,
+                    "voice": "female_young",
+                    "voice_segments": [
+                        {
+                            "start_timestamp": 6.5,
+                            "end_timestamp": 45.0,
+                            "voice": "female_young"
+                        },
+                        {
+                            "start_timestamp": 45.0,
+                            "end_timestamp": 85.0,
+                            "voice": "male_adult"
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let res = parse_llm_json(json).expect("Must parse JSON with voice fields");
+        assert_eq!(res.global_intro.voice.as_deref(), Some("male_adult"));
+        assert_eq!(res.stories.len(), 1);
+        assert_eq!(res.stories[0].voice, "female_young");
+        assert_eq!(res.stories[0].voice_segments.len(), 2);
+        assert_eq!(res.stories[0].voice_segments[0].voice, "female_young");
+        assert_eq!(res.stories[0].voice_segments[1].voice, "male_adult");
+        assert_eq!(res.segments.len(), 1);
+        assert_eq!(res.segments[0].voice.as_deref(), Some("female_young"));
     }
 }

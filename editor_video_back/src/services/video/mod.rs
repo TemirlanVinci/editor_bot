@@ -6,3 +6,4 @@ pub mod music;
 pub mod render;
 pub mod segmentation;
 pub mod subtitles;
+pub mod voice;

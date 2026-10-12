@@ -53,18 +53,20 @@ X-Bot-Secret: `<BOT_SECRET>`
 
 ### Назначение
 Принимает видеофайл и выполняет пайплайн смысловой обработки с помощью ИИ:
-1. **Whisper Transcription**: Единоразовое распознавание речи всего видео с извлечением пословных таймкодов, границ предложений и пауз.
-2. **Context Analysis (Qwen 3.5 9B / 3B через Ollama)**: Смысловой анализ сюжета и разделение на логические части:
-   - **Хук (тизер)**: Первые 4–12 секунд с главной интригой ("Am I the asshole for...").
-   - **Истории**: Индивидуальные истории Reddit переменной длительности, разделенные сменой тем и естественными паузами речи.
-3. **FFmpeg Video Cutting**: Динамическая нарезка, наложение случайного фонового видео, караоке-субтитров (ASS) и фоновой музыки с ускорением 1.08x.
+1. **Whisper Transcription**: Единоразовое распознавание речи всего исходного видео (включая видео с фоновой музыкой) с извлечением пословных таймкодов, границ предложений и пауз.
+2. **Context Analysis (Qwen 2.5 3B / Ollama)**: Смысловой анализ сюжета и разделение на логические части:
+   - **Хук (тизер)**: Первые секунды с заглавным вопросом ("Am I the asshole for...").
+   - **Истории**: Индивидуальные истории Reddit переменной длительности с авто-кастингом голосов (`male_adult`, `male_young`, `female_adult`, `female_young`) и разбиением на реплики персонажей (`voice_segments`).
+3. **Audio Extraction & Cleaning (Demucs v4)**: FFmpeg вырезает точные куски аудио истории, а модель Demucs v4 на CPU очищает речь от оригинальной фоновой музыки YouTube, получая чистый вокал `vocals.wav`.
+4. **Voice Conversion (CosyVoice 3 VC)**: Модель CosyVoice 3 в режиме `inference_vc` берет чистый `vocals.wav` и меняет тембр голоса диктора на референсный голос из `media/voices/<voice>/`, сохраняя 100% исходной длительности, пауз и слогов.
+5. **FFmpeg Video Assembly**: Динамический монтаж видео: наложение случайного фонового видео (B-roll), нового фонового бита, караоке-субтитров (ASS) и ускорение 1.08x (анти-фрод мутация).
 
 Возвращает ZIP-архив с готовыми клипами (`fragment_1_final.mp4`, `fragment_2_final.mp4`...) и файлом метаданных `segments.json`.
 
 ### Ответы:
 - **HTTP 200 OK** (`Content-Type: application/zip`): Бинарный поток ZIP-архива нарезанных клипов и `segments.json`.
 - **HTTP 400 Bad Request**: Отсутствует поле `video` или переданы невалидные параметры.
-- **HTTP 500 Internal Server Error**: Ошибка инференса Whisper / LLM / FFmpeg.
+- **HTTP 500 Internal Server Error**: Ошибка инференса Whisper / LLM / FFmpeg / Voice.
 
 ---
 
@@ -261,3 +263,58 @@ X-Bot-Secret: `<BOT_SECRET>`
   "#reddittok"
 ]
 ```
+
+---
+
+## Микросервис обработки голоса (`voice_service`: Demucs v4 + CosyVoice 3)
+
+Внутренний микросервис (порт `8082`), работающий в связке с Rust-бэкендом для разделения дорожек и изменения тембра.
+
+### GET /health
+Проверка статуса моделей и наличия референсных голосов в `media/voices/`:
+- **HTTP 200 OK**:
+```json
+{
+  "status": "ok",
+  "cosyvoice_loaded": true,
+  "demucs_device": "cpu",
+  "voices_dir": "/app/media/voices",
+  "available_voices": {
+    "male_adult": true,
+    "male_young": true,
+    "female_adult": true,
+    "female_young": true
+  }
+}
+```
+
+### POST /api/v1/voice/separate_vocals
+Очистка вокала от фоновой музыки через Meta Demucs v4 (`htdemucs`):
+```json
+{
+  "source_audio_path": "/app/media/temp/input.wav",
+  "output_audio_path": "/app/media/temp/vocals.wav"
+}
+```
+
+### POST /api/v1/voice/convert
+Комплексный пайплайн: опциональная очистка вокала (Demucs) + конверсия тембра (CosyVoice 3 `inference_vc`):
+```json
+{
+  "source_audio_path": "/app/media/temp/raw_chunk.wav",
+  "output_audio_path": "/app/media/temp/converted_chunk.wav",
+  "voice": "male_adult",
+  "enable_demucs": true
+}
+```
+**Ответ:**
+```json
+{
+  "status": "success",
+  "output_path": "/app/media/temp/converted_chunk.wav",
+  "voice_applied": "male_adult",
+  "demucs_applied": true,
+  "message": "Voice converted to 'male_adult' successfully."
+}
+```
+*Примечание:* Если референсный файл в `media/voices/<voice>/` отсутствует, сервис возвращает `status: "fallback"` и отдает чистый вокал без изменения тембра, предотвращая сбой видеомонтажа.

@@ -180,13 +180,18 @@ pub async fn process_video(
         let segment_words: Vec<Vec<crate::services::video::subtitles::TimedWord>> = clip_plans
             .iter()
             .map(|plan| {
-                let intro_val = plan.intro.as_ref().unwrap();
-                let intro_words = crate::services::video::subtitles::slice_words_for_interval(
-                    &transcript.words,
-                    intro_val.start_timestamp,
-                    intro_val.end_timestamp,
-                );
-                let intro_dur = (intro_val.end_timestamp - intro_val.start_timestamp).max(0.0);
+                let (intro_words, intro_dur) = match &plan.intro {
+                    Some(intro_val) => {
+                        let words = crate::services::video::subtitles::slice_words_for_interval(
+                            &transcript.words,
+                            intro_val.start_timestamp,
+                            intro_val.end_timestamp,
+                        );
+                        let dur = (intro_val.end_timestamp - intro_val.start_timestamp).max(0.0);
+                        (words, dur)
+                    }
+                    None => (Vec::new(), 0.0),
+                };
 
                 let story_words = crate::services::video::subtitles::slice_words_for_interval(
                     &transcript.words,
