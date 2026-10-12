@@ -41,3 +41,7 @@ media/accounts.json
 
 # Игнорировать всю папку media
 media/
+
+# === Модели (Whisper ggml) ===
+models/
+*.bin

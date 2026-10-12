@@ -23,16 +23,16 @@ INSERT INTO temp_seed_accounts (
 VALUES (
         1,
         'Anlog 1 (KG)',
-        '/app/media/acc1.json',
+        '/app/media/acc11.json',
         'http://user:pass@185.123.45.67:8080',
-        '9:10, 14:00, 20:40',
+        '9:10, 14:00, 19:40',
         1,
         true
     ),
     (
         2,
         'Anlog 2 (KG)',
-        '/app/media/acc2.json',
+        '/app/media/acc12.json',
         'http://user:pass@185.123.45.68:8080',
         '12:30, 18:06',
         1,
@@ -41,7 +41,7 @@ VALUES (
     (
         3,
         'Anlog 3 (KG)',
-        '/app/media/acc3.json',
+        '/app/media/acc13.json',
         'http://user:pass@185.123.45.69:8080',
         '15:00',
         1,

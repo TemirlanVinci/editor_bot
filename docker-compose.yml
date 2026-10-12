@@ -27,8 +27,8 @@ services:
       context: ./editor_video_back
       dockerfile: Dockerfile
       args:
-        # small (~466MB, дефолт) / base (~142MB, быстрее) / medium (~1.5GB, точнее)
-        WHISPER_MODEL: ${WHISPER_MODEL:-small}
+        # large-v3-turbo-q5_0 (~574MB, Q5_0 квантованная, высокая точность и скорость)
+        WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo-q5_0}
     container_name: editor_backend
     restart: always
     environment:
@@ -36,7 +36,7 @@ services:
       PORT: 8081
       BOT_SECRET: ${BOT_SECRET}
       MEDIA_DIR: /app/media
-      WHISPER_MODEL_PATH: /app/models/ggml-${WHISPER_MODEL:-small}.bin
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/app/models/ggml-${WHISPER_MODEL:-large-v3-turbo-q5_0}.bin}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
       LLM_API_URL: ${LLM_API_URL:-http://llm:11434}
       QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen2.5:3b}
@@ -53,6 +53,7 @@ services:
         condition: service_started
     volumes:
       - ./media:/app/media
+      - whisper_models:/app/models
     logging:
       driver: "json-file"
       options:
@@ -139,3 +140,4 @@ services:
 volumes:
   postgres_data:
   ollama_data:
+  whisper_models:

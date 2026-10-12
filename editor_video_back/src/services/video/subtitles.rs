@@ -124,7 +124,7 @@ const MAX_GAP_SECONDS: f64 = 0.5;
 fn model_path() -> PathBuf {
     env::var("WHISPER_MODEL_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/app/models/ggml-small.bin"))
+        .unwrap_or_else(|_| PathBuf::from("/app/models/ggml-large-v3-turbo-q5_0.bin"))
 }
 
 /// Язык распознавания речи (ISO 639-1). Переопределяется через WHISPER_LANGUAGE.
