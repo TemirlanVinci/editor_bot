@@ -19,7 +19,7 @@ pub const MUSIC_VOLUME: f64 = 0.22;
 /// Во сколько раз ускоряется видео/аудио при рендере (анти-фрод мутация).
 /// Субтитры тоже масштабируются этим коэффициентом, чтобы не разъезжаться
 /// с озвучкой — см. subtitles::build_karaoke_ass.
-pub const SPEED_FACTOR: f64 = 1.08;
+pub const SPEED_FACTOR: f64 = 1.18;
 
 /// Склеивает список фоновых видеофайлов в один видеофайл без звука,
 /// приводя их к единому разрешению первого видео и 30 fps.
@@ -179,7 +179,7 @@ pub async fn render_narrative_fragments(
             let start_time = std::time::Instant::now();
 
             let audio_dur = audio::get_video_duration(&audio_path).await?;
-            // Изменение 1: Длительность под 1.08x (8% ускорения)
+            // Изменение 1: Длительность под 1.18x (18% ускорения)
             let target_duration = audio_dur / SPEED_FACTOR;
 
             let mut words = if let Some(words) = pre_words
@@ -210,7 +210,7 @@ pub async fn render_narrative_fragments(
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to write subtitle file: {}", e)))?;
 
-            // Изменение 2 и 3: setpts = 1 / 1.08 (0.925926), atempo = 1.08
+            // Изменение 2 и 3: setpts = 1 / 1.18 (0.847458), atempo = 1.18
             // + прожиг караоке-субтитров фильтром ass сразу после setpts.
             // + наложение фоновой музыки с громкостью MUSIC_VOLUME.
             let filter_complex = format!(
