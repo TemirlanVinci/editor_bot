@@ -273,7 +273,7 @@ pub async fn slice_audio_range(
         .args(["-nostdin", "-y"])
         .args(["-ss", &start_str, "-to", &end_str, "-i"])
         .arg(input_path)
-        .args(["-vn", "-c:a", "pcm_s16le"])
+        .args(["-vn", "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2"])
         .arg(output_path)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

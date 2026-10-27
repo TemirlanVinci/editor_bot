@@ -186,18 +186,18 @@ impl Default for LlmConfig {
         let model_name = env::var("QWEN_MODEL_NAME")
             .or_else(|_| env::var("Qwen_MODEL_NAME"))
             .or_else(|_| env::var("LLM_MODEL_NAME"))
-            .unwrap_or_else(|_| "qwen2.5:3b".to_string());
+            .unwrap_or_else(|_| "qwen3.5:4b".to_string());
         let api_key = env::var("LLM_API_KEY")
             .ok()
             .filter(|k| !k.trim().is_empty());
         let timeout_secs = env::var("LLM_TIMEOUT_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(120);
+            .unwrap_or(300);
         let num_ctx = env::var("LLM_NUM_CTX")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(8192);
+            .unwrap_or(16384);
         let temperature = env::var("LLM_TEMPERATURE")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -1238,10 +1238,13 @@ async fn query_llm_api(
                 {"role": "user", "content": user_prompt}
             ],
             "stream": false,
+            "think": false,
+            "keep_alive": 0,
             "format": segmentation_json_schema(),
             "options": {
                 "temperature": config.temperature,
-                "num_ctx": config.num_ctx
+                "num_ctx": config.num_ctx,
+                "num_predict": 4096
             }
         });
 
@@ -1264,18 +1267,28 @@ async fn query_llm_api(
                     .map_err(|e| format!("Failed to parse Ollama JSON response: {e}"))?;
 
                 if let Some(content) = res_json["message"]["content"].as_str() {
-                    return Ok(content.to_string());
+                    let trimmed = content.trim();
+                    if trimmed.is_empty() {
+                        return Err(format!(
+                            "Ollama returned empty message content (thinking exhausted or no tokens generated): {res_json:?}"
+                        ));
+                    }
+                    return Ok(trimmed.to_string());
+                } else {
+                    return Err(format!("Missing content in Ollama message: {res_json:?}"));
                 }
             }
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                warn!(
-                    "Ollama /api/chat returned status {status}: {body}. Trying OpenAI fallback..."
-                );
+                if status == reqwest::StatusCode::NOT_FOUND {
+                    warn!("Ollama /api/chat returned 404 (non-Ollama endpoint). Falling back to OpenAI compatible API...");
+                } else {
+                    return Err(format!("Ollama /api/chat returned status {status}: {body}"));
+                }
             }
             Err(e) => {
-                warn!("Request to {ollama_url} failed: {e}. Trying OpenAI fallback...");
+                return Err(format!("Request to Ollama /api/chat failed: {e}"));
             }
         }
     }
@@ -1294,11 +1307,8 @@ async fn query_llm_api(
             {"role": "user", "content": user_prompt}
         ],
         "temperature": config.temperature,
-        "response_format": {"type": "json_object"},
-        "options": {
-            "num_ctx": config.num_ctx,
-            "temperature": config.temperature
-        }
+        "max_tokens": 4096,
+        "response_format": {"type": "json_object"}
     });
 
     let mut request_builder = client
@@ -1332,7 +1342,11 @@ async fn query_llm_api(
         .map_err(|e| format!("Failed to parse OpenAI JSON response: {e}"))?;
 
     if let Some(content) = res_json["choices"][0]["message"]["content"].as_str() {
-        Ok(content.to_string())
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return Err(format!("LLM returned empty message content: {res_json:?}"));
+        }
+        Ok(trimmed.to_string())
     } else {
         Err(format!("Missing content in LLM response: {res_json:?}"))
     }
@@ -1379,25 +1393,30 @@ pub async fn analyze_narrative(
                 return Ok(parsed);
             }
             Err(parse_err) => {
-                warn!("LLM output parsing error: {parse_err}. Attempting correction retry...");
-                let retry_user_prompt = format!(
-                    "Your previous response was not valid JSON:\n{}\n\nError: {}\n\nPlease return ONLY valid JSON matching the schema for this transcript:\n{}",
-                    raw_reply, parse_err, user_prompt
-                );
-
-                if let Ok(retry_reply) =
-                    query_llm_api(&client, &config, system_prompt, &retry_user_prompt).await
-                    && let Ok(mut retry_parsed) = parse_llm_json(&retry_reply)
-                {
-                    info!("✅ LLM segmentation succeeded on retry!");
-                    refine_intro_boundary_with_transcript(&mut retry_parsed, transcript);
-                    retry_parsed = validate_and_sanitize_segmentation(
-                        retry_parsed,
-                        transcript.total_duration,
-                        Some(&candidate_cut_points),
+                warn!("LLM output parsing error: {parse_err}.");
+                if raw_reply.trim().is_empty() {
+                    warn!("LLM returned empty reply, skipping retry.");
+                } else if start_time.elapsed() < Duration::from_secs(60) {
+                    info!("Attempting quick correction retry...");
+                    let retry_user_prompt = format!(
+                        "Your previous response was not valid JSON:\n{}\n\nError: {}\n\nPlease return ONLY valid JSON matching the schema for this transcript:\n{}",
+                        raw_reply, parse_err, user_prompt
                     );
-                    refine_story_speech_starts(&mut retry_parsed, transcript);
-                    return Ok(retry_parsed);
+
+                    if let Ok(retry_reply) =
+                        query_llm_api(&client, &config, system_prompt, &retry_user_prompt).await
+                        && let Ok(mut retry_parsed) = parse_llm_json(&retry_reply)
+                    {
+                        info!("✅ LLM segmentation succeeded on retry!");
+                        refine_intro_boundary_with_transcript(&mut retry_parsed, transcript);
+                        retry_parsed = validate_and_sanitize_segmentation(
+                            retry_parsed,
+                            transcript.total_duration,
+                            Some(&candidate_cut_points),
+                        );
+                        refine_story_speech_starts(&mut retry_parsed, transcript);
+                        return Ok(retry_parsed);
+                    }
                 }
             }
         },

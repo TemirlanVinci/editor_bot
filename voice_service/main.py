@@ -17,13 +17,21 @@ logger = logging.getLogger("voice_service")
 PORT = int(os.environ.get("PORT", 8082))
 MEDIA_DIR = os.environ.get("MEDIA_DIR", "/app/media")
 VOICES_DIR = os.environ.get("VOICES_DIR", os.path.join(MEDIA_DIR, "voices"))
-DEMUCS_DEVICE = os.environ.get("DEMUCS_DEVICE", "cpu")
+DEMUCS_DEVICE = os.environ.get("DEMUCS_DEVICE", "cuda")
 COSYVOICE_MODEL_DIR = os.environ.get("COSYVOICE_MODEL_DIR", "/app/models/CosyVoice-300M")
 
 app = FastAPI(title="Voice Processing Service (Demucs v4 + CosyVoice 3)")
 
 demucs_engine = DemucsEngine(device=DEMUCS_DEVICE)
 cosyvoice_engine = CosyVoiceEngine(model_dir=COSYVOICE_MODEL_DIR, voices_dir=VOICES_DIR)
+
+@app.on_event("startup")
+def startup_event():
+    logger.info(f"🚀 Initializing Voice Service (Demucs device: {demucs_engine.device})...")
+    if cosyvoice_engine.is_available():
+        logger.info("✅ CosyVoice engine is ready.")
+    else:
+        logger.warning("⚠️ CosyVoice engine is in fallback mode.")
 
 class SeparateVocalsRequest(BaseModel):
     source_audio_path: str
@@ -53,7 +61,7 @@ def health_check():
     return {
         "status": "ok",
         "cosyvoice_loaded": cosyvoice_engine.is_available(),
-        "demucs_device": DEMUCS_DEVICE,
+        "demucs_device": demucs_engine.device,
         "voices_dir": VOICES_DIR,
         "available_voices": available_voices,
     }
@@ -122,6 +130,7 @@ def convert_voice(req: VoiceConvertRequest):
         except Exception as e:
             logger.error(f"❌ CosyVoice conversion failed: {e}. Falling back to clean audio.")
             # Fallback: copy intermediate audio to output_path
+            os.makedirs(os.path.dirname(os.path.abspath(req.output_audio_path)), exist_ok=True)
             shutil.copyfile(intermediate_audio, req.output_audio_path)
             return VoiceConvertResponse(
                 status="fallback",
@@ -137,6 +146,7 @@ def convert_voice(req: VoiceConvertRequest):
             f"ℹ️ {reason} for '{req.voice}'. Returning clean audio without voice change."
         )
         if intermediate_audio != req.output_audio_path:
+            os.makedirs(os.path.dirname(os.path.abspath(req.output_audio_path)), exist_ok=True)
             shutil.copyfile(intermediate_audio, req.output_audio_path)
             if demucs_done and os.path.exists(intermediate_audio):
                 try:

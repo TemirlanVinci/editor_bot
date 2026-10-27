@@ -10,8 +10,14 @@ class DemucsEngine:
     Vocal separator engine using Meta Demucs v4 (htdemucs).
     Extracts clean vocals from speech containing background music or noise.
     """
-    def __init__(self, device: str = "cpu", model_name: str = "htdemucs"):
-        self.device = device
+    def __init__(self, device: str = "cuda", model_name: str = "htdemucs"):
+        if device in ("auto", "cuda") and torch.cuda.is_available():
+            self.device = "cuda"
+        elif device == "cuda" and not torch.cuda.is_available():
+            logger.warning("⚠️ CUDA requested for Demucs but not available. Falling back to CPU.")
+            self.device = "cpu"
+        else:
+            self.device = device or "cpu"
         self.model_name = model_name
         self._separator = None
 
@@ -19,10 +25,10 @@ class DemucsEngine:
         if self._separator is None:
             logger.info(f"⏳ Initializing Demucs v4 ({self.model_name}) on device: {self.device}...")
             from demucs.api import Separator
+            # Note: Do not pass custom segment (e.g. segment=10) as htdemucs requires its native 7.8s segment
             self._separator = Separator(
                 model=self.model_name,
                 device=self.device,
-                segment=10,
                 shifts=1,
                 overlap=0.25,
             )
@@ -52,7 +58,16 @@ class DemucsEngine:
             if vocals_tensor.is_cuda:
                 vocals_tensor = vocals_tensor.cpu()
 
-            torchaudio.save(output_path, vocals_tensor, separator.samplerate)
+            # Save with soundfile for stability (avoiding torchcodec dependency in torchaudio)
+            try:
+                import soundfile as sf
+                audio_np = vocals_tensor.numpy()
+                if audio_np.ndim == 2:
+                    audio_np = audio_np.T
+                sf.write(output_path, audio_np, separator.samplerate)
+            except Exception:
+                torchaudio.save(output_path, vocals_tensor, separator.samplerate)
+
             logger.info(f"✅ Clean vocals successfully extracted to {output_path}")
             return output_path
         except Exception as e:

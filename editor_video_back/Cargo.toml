@@ -38,6 +38,10 @@ whisper-rs = "0.16"
 hound = "3.5"
 reqwest = { version = "0.12", features = ["json"] }
 
+[features]
+default = []
+cuda = ["whisper-rs/cuda"]
+
 [dev-dependencies]
 axum-test = "21.1.0"
 tower = { version = "0.5", features = ["util"] }

@@ -39,14 +39,24 @@ services:
       WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/app/models/ggml-${WHISPER_MODEL:-large-v3-turbo-q5_0}.bin}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
       LLM_API_URL: ${LLM_API_URL:-http://llm:11434}
-      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen2.5:3b}
+      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen3.5:4b}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_TIMEOUT_SECS: ${LLM_TIMEOUT_SECS:-120}
-      LLM_NUM_CTX: ${LLM_NUM_CTX:-8192}
+      LLM_TIMEOUT_SECS: ${LLM_TIMEOUT_SECS:-300}
+      LLM_NUM_CTX: ${LLM_NUM_CTX:-16384}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
+      WHISPER_USE_GPU: ${WHISPER_USE_GPU:-true}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       VOICE_SERVICE_URL: ${VOICE_SERVICE_URL:-http://voice_service:8082}
       ENABLE_VOICE_CONVERSION: ${ENABLE_VOICE_CONVERSION:-true}
       ENABLE_DEMUCS: ${ENABLE_DEMUCS:-true}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     ports:
       - "127.0.0.1:8081:8081"
     depends_on:
@@ -59,6 +69,7 @@ services:
     volumes:
       - ./media:/app/media
       - whisper_models:/app/models
+      - shared_temp:/tmp
     logging:
       driver: "json-file"
       options:
@@ -75,13 +86,24 @@ services:
       PORT: 8082
       MEDIA_DIR: /app/media
       VOICES_DIR: /app/media/voices
-      DEMUCS_DEVICE: ${DEMUCS_DEVICE:-cpu}
+      DEMUCS_DEVICE: ${DEMUCS_DEVICE:-cuda}
       COSYVOICE_MODEL_DIR: ${COSYVOICE_MODEL_DIR:-/app/models/CosyVoice-300M}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     ports:
       - "127.0.0.1:8082:8082"
     volumes:
       - ./media:/app/media
       - voice_models:/app/models
+      - torch_cache:/root/.cache
+      - shared_temp:/tmp
     logging:
       driver: "json-file"
       options:
@@ -93,17 +115,17 @@ services:
     container_name: editor_llm
     restart: always
     environment:
-      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_KEEP_ALIVE=2m
+      - OLLAMA_MAX_LOADED_MODELS=1
     deploy:
       resources:
         limits:
           memory: 12G
-        # Для активации GPU NVIDIA раскомментируйте блок ниже (требуется nvidia-container-toolkit на хосте):
-        # reservations:
-        #   devices:
-        #     - driver: nvidia
-        #       count: all
-        #       capabilities: [gpu]
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
@@ -120,7 +142,7 @@ services:
     restart: "no"
     environment:
       OLLAMA_HOST: http://llm:11434
-      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen2.5:3b}
+      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen3.5:4b}
     depends_on:
       - llm
     entrypoint: ["/bin/sh", "-c"]
@@ -170,3 +192,5 @@ volumes:
   ollama_data:
   whisper_models:
   voice_models:
+  torch_cache:
+  shared_temp:

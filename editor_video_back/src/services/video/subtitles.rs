@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Слово с таймингом в секундах, отсчитанным от начала аудиофрагмента
@@ -139,21 +139,52 @@ fn get_whisper_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+/// Проверяет, включено ли использование GPU для Whisper (по умолчанию включено).
+pub fn is_whisper_gpu_enabled() -> bool {
+    env::var("WHISPER_USE_GPU")
+        .map(|v| v != "false" && v != "0" && v != "no")
+        .unwrap_or(true)
+}
+
 /// Возвращает разделяемый (одна на весь процесс) контекст Whisper.
 /// Модель грузится с диска лениво, один раз, при первом вызове.
 pub fn get_context() -> Result<Arc<WhisperContext>, AppError> {
     let result = MODEL.get_or_init(|| {
         let path = model_path();
-        info!("🧠 Loading Whisper model from {:?}", path);
+        let use_gpu = is_whisper_gpu_enabled();
+        info!(
+            "🧠 Loading Whisper model from {:?} (use_gpu: {})...",
+            path, use_gpu
+        );
 
         let path_str = match path.to_str() {
             Some(s) => s,
             None => return Err("Invalid Whisper model path (not valid UTF-8)".to_string()),
         };
 
-        WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
-            .map(Arc::new)
-            .map_err(|e| format!("Failed to load Whisper model from {:?}: {}", path, e))
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(use_gpu);
+
+        match WhisperContext::new_with_params(path_str, params) {
+            Ok(ctx) => Ok(Arc::new(ctx)),
+            Err(e) if use_gpu => {
+                warn!(
+                    "⚠️ Failed to initialize Whisper with GPU ({}). Falling back to CPU...",
+                    e
+                );
+                let mut cpu_params = WhisperContextParameters::default();
+                cpu_params.use_gpu(false);
+                WhisperContext::new_with_params(path_str, cpu_params)
+                    .map(Arc::new)
+                    .map_err(|e2| {
+                        format!("Failed to load Whisper model on CPU fallback: {}", e2)
+                    })
+            }
+            Err(e) => Err(format!(
+                "Failed to load Whisper model from {:?}: {}",
+                path, e
+            )),
+        }
     });
 
     result.clone().map_err(AppError::Internal)
