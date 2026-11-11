@@ -457,6 +457,8 @@ pub async fn prepare_clip_audio_tracks(
     let enable_demucs = crate::services::video::voice::is_demucs_enabled();
     let pause_dur = crate::services::video::segmentation::intro_pause_duration();
     let mut generated_paths = Vec::with_capacity(clip_plans.len());
+    let mut intro_cache: std::collections::HashMap<(u64, u64, String), PathBuf> =
+        std::collections::HashMap::new();
 
     for plan in clip_plans {
         let clip_idx = plan.clip_index;
@@ -468,28 +470,41 @@ pub async fn prepare_clip_audio_tracks(
         })?;
 
         let intro_voice = intro_val.voice.as_deref().unwrap_or("male_adult");
+        let start_ms = (intro_val.start_timestamp * 1000.0).round() as u64;
+        let end_ms = (intro_val.end_timestamp * 1000.0).round() as u64;
+        let cache_key = (start_ms, end_ms, intro_voice.to_string());
 
-        // 1. Срез и переозвучка intro
-        let intro_raw = output_dir.join(format!("intro_raw_{:03}.wav", clip_idx));
-        let intro_conv = output_dir.join(format!("intro_conv_{:03}.wav", clip_idx));
+        // 1. Срез и переозвучка intro (с кэшированием идентичного заглавного хука для всех клипов)
+        let conv_intro_path = if let Some(cached_path) = intro_cache.get(&cache_key) {
+            info!(
+                "⚡ Reusing cached converted intro for clip #{}: {:?}",
+                clip_idx, cached_path
+            );
+            cached_path.clone()
+        } else {
+            let intro_raw = output_dir.join(format!("intro_raw_{:03}.wav", clip_idx));
+            let intro_conv = output_dir.join(format!("intro_conv_{:03}.wav", clip_idx));
 
-        slice_audio_range(
-            source_audio_path,
-            &intro_raw,
-            intro_val.start_timestamp,
-            intro_val.end_timestamp,
-        )
-        .await?;
+            slice_audio_range(
+                source_audio_path,
+                &intro_raw,
+                intro_val.start_timestamp,
+                intro_val.end_timestamp,
+            )
+            .await?;
 
-        let conv_intro_path = crate::services::video::voice::convert_voice(
-            &intro_raw,
-            &intro_conv,
-            intro_voice,
-            enable_demucs,
-        )
-        .await?;
+            let conv = crate::services::video::voice::convert_voice(
+                &intro_raw,
+                &intro_conv,
+                intro_voice,
+                enable_demucs,
+            )
+            .await?;
 
-        let _ = tokio::fs::remove_file(&intro_raw).await;
+            let _ = tokio::fs::remove_file(&intro_raw).await;
+            intro_cache.insert(cache_key, conv.clone());
+            conv
+        };
 
         // 2. Срез и переозвучка story (с поддержкой подсегментов)
         let conv_story_path =
@@ -529,7 +544,6 @@ pub async fn prepare_clip_audio_tracks(
                 AppError::Validation(format!("Failed to execute ffmpeg concat audio: {}", e))
             })?;
 
-        let _ = tokio::fs::remove_file(&conv_intro_path).await;
         let _ = tokio::fs::remove_file(&conv_story_path).await;
 
         if !output.status.success() {
@@ -550,6 +564,11 @@ pub async fn prepare_clip_audio_tracks(
         );
 
         generated_paths.push(output_path);
+    }
+
+    // Очищаем кэшированные временные файлы интро после завершения обработки всех клипов
+    for cached_intro in intro_cache.into_values() {
+        let _ = tokio::fs::remove_file(&cached_intro).await;
     }
 
     Ok(generated_paths)

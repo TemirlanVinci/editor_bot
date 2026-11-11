@@ -233,12 +233,16 @@ async def cb_cut_mode(callback: CallbackQuery, state: FSMContext):
     mode_desc = "<b>с заголовком</b> (yes)" if include_intro else "<b>без заголовка</b> (no)"
     await callback.answer(f"Режим: {'С заголовком' if include_intro else 'Без заголовка'}")
     if callback.message:
-        await callback.message.edit_text(
-            f"✅ Выбран режим нарезки: {mode_desc}\n\n"
-            f"Теперь отправь ссылку на YouTube видео или видеофайл (до 20 МБ).\n"
-            f"<i>(При необходимости можно переключить режим ниже)</i>",
-            reply_markup=get_cut_mode_keyboard(),
-        )
+        try:
+            await callback.message.edit_text(
+                f"✅ Выбран режим нарезки: {mode_desc}\n\n"
+                f"Теперь отправь ссылку на YouTube видео или видеофайл (до 20 МБ).\n"
+                f"<i>(При необходимости можно переключить режим ниже)</i>",
+                reply_markup=get_cut_mode_keyboard(),
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                raise
 
 
 async def process_url_cut(message: Message, url: str, include_intro: bool = True):

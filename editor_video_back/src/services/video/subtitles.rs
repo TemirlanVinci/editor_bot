@@ -55,22 +55,31 @@ impl FullTranscript {
         for seg in &self.segments[1..] {
             let text = seg.text.trim();
             let duration = seg.end - block_start;
-            let is_major_pause = last_pause >= 0.35;
-            let is_question = block_texts
-                .last()
-                .map(|t| t.ends_with('?') || t.ends_with('!'))
-                .unwrap_or(false);
-            let is_ellipsis = block_texts
-                .last()
-                .map(|t| t.ends_with("...") || t.ends_with('…'))
-                .unwrap_or(false);
+            // В первые 30 секунд видео (где находится заголовок и вопрос поста)
+            // передаем модели детальные посекундные границы (паузы >= 0.35s или знаки ?/!).
+            // Далее для остального видео объединяем фразы в связные параграфы по 25-35 секунд,
+            // разделяя только по крупным паузам (>= 0.70s), что экономит свыше 70% токенов контекста
+            // и исключает переполнение контекста локальной модели (Ollama limit / prompt truncation).
+            let is_intro_window = block_start < 30.0;
+            let should_split = if is_intro_window {
+                let is_major_pause = last_pause >= 0.35;
+                let is_question = block_texts
+                    .last()
+                    .map(|t| t.ends_with('?') || t.ends_with('!'))
+                    .unwrap_or(false);
+                let is_ellipsis = block_texts
+                    .last()
+                    .map(|t| t.ends_with("...") || t.ends_with('…'))
+                    .unwrap_or(false);
+                is_major_pause || duration >= 10.0 || is_question || is_ellipsis
+            } else {
+                let is_speech_boundary = last_pause >= 0.70;
+                let is_target_paragraph = duration >= 25.0 && last_pause >= 0.35;
+                let is_max_duration = duration >= 35.0;
+                is_speech_boundary || is_target_paragraph || is_max_duration
+            };
 
-            // В первые 45 секунд видео (где находится заголовок и начало первой истории)
-            // НИКОГДА не объединяем сегменты, чтобы передать модели точные посекундные границы.
-            // Далее объединяем сегменты при отсутствии пауз для экономии токенов контекста.
-            let is_intro_window = block_start < 45.0;
-
-            if is_intro_window || is_major_pause || duration >= 12.0 || is_question || is_ellipsis {
+            if should_split {
                 let joined = block_texts.join(" ");
                 if last_pause >= 0.20 {
                     out.push_str(&format!(

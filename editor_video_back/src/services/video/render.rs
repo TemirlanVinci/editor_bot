@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs;
 use tokio::process::Command;
-use tracing::error;
+use tracing::{error, info, warn};
 
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use tracing::info;
 
 use crate::services::video::{audio, subtitles};
 
@@ -20,6 +19,14 @@ pub const MUSIC_VOLUME: f64 = 0.22;
 /// Субтитры тоже масштабируются этим коэффициентом, чтобы не разъезжаться
 /// с озвучкой — см. subtitles::build_karaoke_ass.
 pub const SPEED_FACTOR: f64 = 1.18;
+
+/// Проверяет, включено ли аппаратное кодирование NVENC на GPU NVIDIA (по умолчанию true).
+pub fn is_nvenc_enabled() -> bool {
+    std::env::var("FFMPEG_USE_NVENC")
+        .unwrap_or_else(|_| "true".to_string())
+        .to_lowercase()
+        != "false"
+}
 
 /// Склеивает список фоновых видеофайлов в один видеофайл без звука,
 /// приводя их к единому разрешению первого видео и 30 fps.
@@ -63,8 +70,20 @@ pub async fn concat_background_videos(
         cmd.arg("-i").arg(file);
     }
 
-    cmd.args(["-filter_complex", &filter_complex])
-        .args([
+    cmd.args(["-filter_complex", &filter_complex]);
+    let use_nvenc = is_nvenc_enabled();
+    if use_nvenc {
+        cmd.args([
+            "-map",
+            "[outv]",
+            "-an",
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p2",
+        ]);
+    } else {
+        cmd.args([
             "-map",
             "[outv]",
             "-an",
@@ -72,8 +91,9 @@ pub async fn concat_background_videos(
             "libx264",
             "-preset",
             "superfast",
-        ])
-        .arg(output_path);
+        ]);
+    }
+    cmd.arg(output_path);
 
     let output = cmd
         .output()
@@ -221,8 +241,9 @@ pub async fn render_narrative_fragments(
                 volume = MUSIC_VOLUME
             );
 
-            let output = Command::new("ffmpeg")
-                .stdin(Stdio::null())
+            let use_nvenc = is_nvenc_enabled();
+            let mut cmd = Command::new("ffmpeg");
+            cmd.stdin(Stdio::null())
                 .args([
                     "-nostdin",
                     "-y",
@@ -247,6 +268,25 @@ pub async fn render_narrative_fragments(
                     &format!("{:.3}", target_duration),
                     "-map_metadata",
                     "-1",
+                ]);
+
+            if use_nvenc {
+                cmd.args([
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p4",
+                    "-cq",
+                    "26",
+                    "-maxrate",
+                    "2800k",
+                    "-bufsize",
+                    "5600k",
+                    "-pix_fmt",
+                    "yuv420p",
+                ]);
+            } else {
+                cmd.args([
                     "-c:v",
                     "libx264",
                     "-preset",
@@ -259,17 +299,78 @@ pub async fn render_narrative_fragments(
                     "5600k",
                     "-pix_fmt",
                     "yuv420p",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "128k",
-                ])
+                ]);
+            }
+
+            cmd.args(["-c:a", "aac", "-b:a", "128k"])
                 .arg(&output_path)
                 .stdout(Stdio::null())
-                .stderr(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            let mut output = cmd
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to execute ffmpeg: {}", e)))?;
+
+            if !output.status.success() && use_nvenc {
+                let err_msg = String::from_utf8_lossy(&output.stderr);
+                warn!(
+                    "⚠️ NVENC render failed for fragment {}, falling back to CPU libx264: {}",
+                    fragment_index, err_msg
+                );
+                let mut fallback_cmd = Command::new("ffmpeg");
+                fallback_cmd
+                    .stdin(Stdio::null())
+                    .args([
+                        "-nostdin",
+                        "-y",
+                        "-ss",
+                        &format!("{:.3}", bg_start_time),
+                        "-stream_loop",
+                        "-1",
+                        "-i",
+                    ])
+                    .arg(&bg_path)
+                    .arg("-i")
+                    .arg(&audio_path)
+                    .args(["-stream_loop", "-1", "-i"])
+                    .arg(&music_p)
+                    .args(["-filter_complex", &filter_complex])
+                    .args([
+                        "-map",
+                        "[v]",
+                        "-map",
+                        "[a]",
+                        "-t",
+                        &format!("{:.3}", target_duration),
+                        "-map_metadata",
+                        "-1",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "fast",
+                        "-crf",
+                        "26",
+                        "-maxrate",
+                        "2800k",
+                        "-bufsize",
+                        "5600k",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "128k",
+                    ])
+                    .arg(&output_path)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped());
+
+                output = fallback_cmd
+                    .output()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to execute ffmpeg fallback: {}", e)))?;
+            }
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);

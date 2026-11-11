@@ -293,18 +293,33 @@ Target Structure:
    - In 10-20 minute compilation videos, there is either one long story or multiple distinct stories/comments.
    - For multiple stories: segment each separate story at its thematic boundary into an individual clip (target duration: 60 to 120 seconds).
    - For a single long story: split it into cohesive, dramatic parts (Part 1, Part 2, Part 3...) of 60 to 100 seconds at suspense points or cliffhangers, and set `is_part_of_split: true`.
+   - STRICT DURATION & CONSOLIDATION RULES:
+     * Target clip length is 60 to 120 seconds (minimum 45 seconds).
+     * NEVER create tiny stories or micro-clips under 40 seconds (strictly no 5s, 10s, or 20s fragments!).
+     * If an anecdote or Reddit comment is short (< 40 seconds), group multiple adjacent comments together into a single story clip, or omit 1-sentence micro-comments!
+     * For a typical 10-minute video, generate 4 to 7 full, engaging stories (NOT 10+ fragmented snippets!).
    - Do NOT cut mid-sentence! The end timestamp must correspond to a natural speech pause after the resolution/climax.
    - The first story starts immediately where the narrator starts telling the story (strictly at or right after `global_intro.end_timestamp`).
 
 3. `voice` & `voice_segments` (CosyVoice 3 Voice Profiles):
-   - Select the most fitting narrator voice for each story from:
+   - Available Voice Profiles:
      * "male_young": young man / guy / student (16-24 yo).
      * "male_adult": adult man / husband / father / mature narrator (25+ yo).
      * "female_young": young woman / girl / student (16-24 yo).
      * "female_adult": adult woman / wife / mother / mature narrator (25+ yo).
-   - Infer gender & age from narrative context (e.g., "Я парень...", "Мне 38 лет...", past tense verbs in Russian "сказал/сказала").
-   - If gender is unspecified, alternate voices between stories so consecutive stories have distinct voices!
-   - If a clip contains multiple mini-stories or comments from different speakers, specify them in `voice_segments`. Otherwise set `voice_segments: []`.
+   - CRITICAL THEMATIC & DEMOGRAPHIC CONTEXT RULES:
+     * ALWAYS analyze the macro question and target audience in `global_intro.title` first:
+       - If the video prompt/question is addressed to women or girls (e.g., "ДЕВУШКИ, расскажите...", "Девчонки, был ли случай...", "Женщины реддита...", "Мамы..."):
+         The stories are shared by female authors. You MUST assign female voices ("female_young" or "female_adult") to ALL story segments by default!
+       - If addressed to men or guys (e.g., "ПАРНИ, расскажите...", "Мужики...", "Папы..."):
+         The stories are shared by male authors. You MUST assign male voices ("male_young" or "male_adult")!
+     * DO NOT rely solely on individual Russian verb endings (e.g., "-л" vs "-ла")! Whisper ASR frequently makes acoustic transcription errors with gender endings in Russian. Rely primarily on the topic context, relationship roles ("мой парень", "мой муж", "бывший", "мы с подругой"), and who the discussion is asking to speak.
+     * Within the detected gender, alternate voices across consecutive stories (e.g., alternating between "female_young" and "female_adult") to make the clips varied and engaging!
+     * If gender is genuinely neutral or ambiguous, alternate between male and female voices across stories.
+   - STRICT TOKEN-EFFICIENCY RULE FOR `voice_segments`:
+     * For regular single-narrator stories and comments, ALWAYS set `voice_segments: []`!
+     * NEVER emit sentence-by-sentence voice segments for monologues — doing so generates thousands of redundant tokens and causes timeouts!
+     * ONLY use `voice_segments` if there is a real theatrical multi-character dialogue inside the story where distinct people talk to each other.
 
 Critical Timestamp Rules:
 - Choose timestamps grounded in the provided transcript lines: `[start - end] (pause: ...)`.
@@ -416,21 +431,11 @@ pub fn parse_llm_json(raw_text: &str) -> Result<SegmentationResult, String> {
         trimmed
     };
 
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RawParsed {
-        NewFormat {
-            global_intro: GlobalIntro,
-            stories: Vec<StorySegment>,
-            #[serde(default)]
-            segments: Vec<NarrativeSegment>,
-        },
-        LegacyFormat {
-            segments: Vec<NarrativeSegment>,
-        },
-    }
+    let parsed_res = serde_json::from_str::<RawParsed>(json_str).or_else(|orig_err| {
+        try_repair_truncated_json(raw_text).ok_or(orig_err)
+    });
 
-    match serde_json::from_str::<RawParsed>(json_str) {
+    match parsed_res {
         Ok(RawParsed::NewFormat {
             global_intro,
             stories,
@@ -492,6 +497,56 @@ pub fn parse_llm_json(raw_text: &str) -> Result<SegmentationResult, String> {
             "Failed to parse SegmentationResult JSON: {e}. Raw: {json_str}"
         )),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawParsed {
+    NewFormat {
+        global_intro: GlobalIntro,
+        stories: Vec<StorySegment>,
+        #[serde(default)]
+        segments: Vec<NarrativeSegment>,
+    },
+    LegacyFormat {
+        segments: Vec<NarrativeSegment>,
+    },
+}
+
+/// Пытается восстановить обрезанный на лимите токенов JSON от LLM.
+/// Если модель прервала генерацию списка stories (EOF while parsing a list),
+/// находим последний полностью сгенерированный элемент и корректно закрываем JSON.
+fn try_repair_truncated_json(input: &str) -> Option<RawParsed> {
+    let trimmed = input.trim();
+    let first_brace = trimmed.find('{')?;
+    let content = &trimmed[first_brace..];
+
+    // Ищем закрывающие скобки '}' справа налево
+    let mut search_idx = content.len();
+    while let Some(brace_rel) = content[..search_idx].rfind('}') {
+        let candidate_slice = content[..=brace_rel].trim();
+        let clean_slice = candidate_slice.strip_suffix(',').unwrap_or(candidate_slice);
+
+        // Попытка 1: Обрыв внутри списка stories: закрываем массив и корневой объект
+        let candidate_repaired = format!("{}\n  ]\n}}", clean_slice);
+        if let Ok(parsed) = serde_json::from_str::<RawParsed>(&candidate_repaired) {
+            info!("🛡️ Successfully repaired truncated LLM JSON (closed stories array).");
+            return Some(parsed);
+        }
+
+        // Попытка 2: Обрыв после закрытия массива stories: закрываем только корневой объект
+        let candidate_repaired_obj = format!("{}\n}}", clean_slice);
+        if let Ok(parsed) = serde_json::from_str::<RawParsed>(&candidate_repaired_obj) {
+            info!("🛡️ Successfully repaired truncated LLM JSON (closed root object).");
+            return Some(parsed);
+        }
+
+        search_idx = brace_rel;
+        if search_idx == 0 {
+            break;
+        }
+    }
+    None
 }
 
 /// Минимальная длительность истории для предотвращения создания слишком коротких роликов (35 сек).
@@ -1088,8 +1143,103 @@ pub fn refine_story_speech_starts(result: &mut SegmentationResult, transcript: &
     }
 }
 
+/// Определяет подходящие голоса (интро и пул историй) на основе контекста ключевых слов в заголовке/хуке.
+pub fn infer_demographic_voices(title: &str, num_stories: usize) -> (Option<String>, Vec<String>) {
+    let title_lower = title.to_lowercase();
+    let trimmed = title_lower.trim();
+
+    // 1. Проверяем явное обращение к целевой аудитории в начале заголовка (например, "ДЕВУШКИ. расскажите...", "ПАРНИ, ...")
+    let female_audience_patterns = [
+        "девушки", "девчонки", "женщины", "девочки", "мамы", "подруги",
+        "вопрос к девушкам", "вопрос к женщинам", "девушки реддит", "девушки reddit",
+        "женщины реддит", "женщины reddit", "girls of reddit", "women of reddit",
+    ];
+
+    let male_audience_patterns = [
+        "парни", "мужики", "мужчины", "папы", "мальчики",
+        "вопрос к парням", "вопрос к мужикам", "вопрос к мужчинам", "парни реддит", "парни reddit",
+        "мужчины реддит", "мужчины reddit", "men of reddit", "guys of reddit",
+    ];
+
+    let is_prefix_match = |prefix: &str| -> bool {
+        if !trimmed.starts_with(prefix) {
+            return false;
+        }
+        let rest = &trimmed[prefix.len()..];
+        rest.is_empty()
+            || rest.starts_with('.')
+            || rest.starts_with(',')
+            || rest.starts_with(':')
+            || rest.starts_with('!')
+            || rest.starts_with('?')
+            || rest.starts_with(' ')
+    };
+
+    let starts_with_female = female_audience_patterns.iter().any(|&p| is_prefix_match(p));
+    let starts_with_male = male_audience_patterns.iter().any(|&p| is_prefix_match(p));
+
+    let (is_female, is_male) = if starts_with_female && !starts_with_male {
+        (true, false)
+    } else if starts_with_male && !starts_with_female {
+        (false, true)
+    } else {
+        // Общий семантический поиск, если в начале нет явного обращения
+        let has_female = title_lower.contains("девушк")
+            || title_lower.contains("девчат")
+            || title_lower.contains("женщин")
+            || title_lower.contains("мам")
+            || title_lower.contains("подруг")
+            || title_lower.contains("девочк")
+            || title_lower.contains("девиц")
+            || title_lower.contains("girl")
+            || title_lower.contains("women")
+            || title_lower.contains("woman")
+            || title_lower.contains("female");
+
+        let has_male = title_lower.contains("парн")
+            || title_lower.contains("парен")
+            || title_lower.contains("мужчин")
+            || title_lower.contains("мужик")
+            || title_lower.contains("пап")
+            || title_lower.contains("отц")
+            || title_lower.contains("boy")
+            || title_lower.contains("men")
+            || title_lower.contains("guy");
+
+        (has_female, has_male)
+    };
+
+    let (intro_voice, voice_pool) = if is_female && !is_male {
+        (
+            "female_adult".to_string(),
+            vec!["female_young".to_string(), "female_adult".to_string()],
+        )
+    } else if is_male && !is_female {
+        (
+            "male_adult".to_string(),
+            vec!["male_young".to_string(), "male_adult".to_string()],
+        )
+    } else {
+        (
+            "male_adult".to_string(),
+            vec![
+                "male_young".to_string(),
+                "female_young".to_string(),
+                "male_adult".to_string(),
+                "female_adult".to_string(),
+            ],
+        )
+    };
+
+    let story_voices = (0..num_stories)
+        .map(|i| voice_pool[i % voice_pool.len()].clone())
+        .collect();
+
+    (Some(intro_voice), story_voices)
+}
+
 /// Умная эвристическая нарезка на случай недоступности или ошибки LLM.
-/// Находит заглавный вопрос (хук) и делит оставшуюся историю на логичные части.
+/// Находит заглавный вопрос (хук), делит оставшуюся историю на логичные части и назначает голоса по контексту темы.
 pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> SegmentationResult {
     info!(
         "🛡️ Generating rule-based narrative fallback segmentation for duration {:.2}s",
@@ -1099,12 +1249,14 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
     let candidate_cut_points: Vec<f64> = transcript.segments.iter().map(|s| s.end).collect();
 
     if transcript.segments.is_empty() {
+        let (inferred_intro_voice, inferred_story_voices) =
+            infer_demographic_voices("Opening Question", 1);
         let mut res = SegmentationResult {
             global_intro: GlobalIntro {
                 start_timestamp: 0.0,
                 end_timestamp: (total_duration * 0.05).clamp(3.5, 8.0).min(total_duration),
                 title: "Opening Question".to_string(),
-                voice: None,
+                voice: inferred_intro_voice,
             },
             stories: vec![StorySegment {
                 story_id: 1,
@@ -1112,7 +1264,10 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
                 end_timestamp: total_duration,
                 title: "Story Part 1".to_string(),
                 is_part_of_split: false,
-                voice: default_voice(),
+                voice: inferred_story_voices
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(default_voice),
                 voice_segments: Vec::new(),
             }],
             segments: Vec::new(),
@@ -1206,6 +1361,17 @@ pub fn fallback_narrative_segmentation(transcript: &FullTranscript) -> Segmentat
 
             story_start = best_cut;
             story_idx += 1;
+        }
+    }
+
+    // 3. Интеллектуальный авто-кастинг голосов для фоллбэка на основе контекста хука
+    let (inferred_intro_voice, inferred_story_voices) =
+        infer_demographic_voices(&raw_res.global_intro.title, stories.len().max(1));
+
+    raw_res.global_intro.voice = inferred_intro_voice;
+    for (idx, story) in stories.iter_mut().enumerate() {
+        if idx < inferred_story_voices.len() {
+            story.voice = inferred_story_voices[idx].clone();
         }
     }
 
@@ -2329,4 +2495,58 @@ Hope this helps!"#;
         assert_eq!(res.segments.len(), 1);
         assert_eq!(res.segments[0].voice.as_deref(), Some("female_young"));
     }
+
+    #[test]
+    fn test_infer_demographic_voices_female_and_male() {
+        let title_girls = "ДЕВУШКИ. расскажите про случай когда парень не понял намека";
+        let (intro_v, stories_v) = infer_demographic_voices(title_girls, 3);
+        assert_eq!(intro_v.as_deref(), Some("female_adult"));
+        assert_eq!(stories_v[0], "female_young");
+        assert_eq!(stories_v[1], "female_adult");
+        assert_eq!(stories_v[2], "female_young");
+
+        let title_guys = "ПАРНИ. расскажите про самый неловкий случай";
+        let (intro_v, stories_v) = infer_demographic_voices(title_guys, 2);
+        assert_eq!(intro_v.as_deref(), Some("male_adult"));
+        assert_eq!(stories_v[0], "male_young");
+        assert_eq!(stories_v[1], "male_adult");
+    }
+
+    #[test]
+    fn test_parse_llm_json_truncated_repair() {
+        let truncated_raw = r#"{
+  "global_intro": {
+    "end_timestamp": 5.72,
+    "start_timestamp": 1.54,
+    "title": "Девушки, расскажите о ситуации...",
+    "voice": "female_adult"
+  },
+  "stories": [
+    {
+      "end_timestamp": 66.73,
+      "is_part_of_split": false,
+      "start_timestamp": 5.72,
+      "story_id": 1,
+      "title": "Намек с костюмом кролика",
+      "voice": "female_adult",
+      "voice_segments": []
+    },
+    {
+      "end_timestamp": 161.12,
+      "is_part_of_split": false,
+      "start_timestamp": 67.09,
+      "story_id": 2,
+      "title": "Поцелуй в душе",
+      "voice": "female_young",
+      "voice_segments": []
+    }.
+"#;
+
+        let res = parse_llm_json(truncated_raw).expect("Must repair and parse truncated LLM output");
+        assert_eq!(res.global_intro.voice.as_deref(), Some("female_adult"));
+        assert_eq!(res.stories.len(), 2);
+        assert_eq!(res.stories[0].story_id, 1);
+        assert_eq!(res.stories[1].story_id, 2);
+    }
 }
+

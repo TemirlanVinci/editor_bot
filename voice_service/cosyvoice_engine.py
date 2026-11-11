@@ -95,6 +95,8 @@ class CosyVoiceEngine:
         self.voices_dir = voices_dir
         self.model = None
         self._init_attempted = False
+        self.fp16_enabled = os.environ.get("COSYVOICE_FP16", "true").lower() in ("true", "1", "yes")
+        self.load_jit_enabled = os.environ.get("COSYVOICE_LOAD_JIT", "true").lower() in ("true", "1", "yes")
 
     def is_available(self) -> bool:
         """Returns True if CosyVoice model is loaded and ready."""
@@ -168,16 +170,21 @@ class CosyVoiceEngine:
 
         try:
             logger.info(f"⏳ Loading CosyVoice model from {self.model_dir}...")
+            is_cuda = torch.cuda.is_available()
+            use_fp16 = self.fp16_enabled and is_cuda
+            use_jit = self.load_jit_enabled and is_cuda
+            logger.info(f"🚀 CosyVoice acceleration settings: fp16={use_fp16}, load_jit={use_jit}, cuda={is_cuda}")
+
             # Try importing CosyVoice CLI AutoModel or CosyVoice
             try:
                 from cosyvoice.cli.cosyvoice import AutoModel
-                self.model = AutoModel(model_dir=self.model_dir)
+                self.model = AutoModel(model_dir=self.model_dir, fp16=use_fp16, load_jit=use_jit)
             except (ImportError, AttributeError):
                 from cosyvoice.cli.cosyvoice import CosyVoice
-                self.model = CosyVoice(self.model_dir)
+                self.model = CosyVoice(self.model_dir, fp16=use_fp16, load_jit=use_jit)
 
             self._patch_speech_token_extractor()
-            logger.info("✅ CosyVoice model successfully loaded!")
+            logger.info(f"✅ CosyVoice model successfully loaded (fp16={use_fp16}, load_jit={use_jit})!")
         except ImportError as e:
             logger.warning(f"⚠️ cosyvoice package not installed or import error: {e}. Running in fallback mode.")
         except Exception as e:

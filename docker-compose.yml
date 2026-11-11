@@ -42,7 +42,7 @@ services:
       QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen3.5:4b}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_TIMEOUT_SECS: ${LLM_TIMEOUT_SECS:-300}
-      LLM_NUM_CTX: ${LLM_NUM_CTX:-16384}
+      LLM_NUM_CTX: ${LLM_NUM_CTX:-8192}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
       WHISPER_USE_GPU: ${WHISPER_USE_GPU:-true}
       NVIDIA_VISIBLE_DEVICES: all
@@ -50,6 +50,7 @@ services:
       VOICE_SERVICE_URL: ${VOICE_SERVICE_URL:-http://voice_service:8082}
       ENABLE_VOICE_CONVERSION: ${ENABLE_VOICE_CONVERSION:-true}
       ENABLE_DEMUCS: ${ENABLE_DEMUCS:-true}
+      FFMPEG_USE_NVENC: ${FFMPEG_USE_NVENC:-true}
     deploy:
       resources:
         reservations:
@@ -88,6 +89,8 @@ services:
       VOICES_DIR: /app/media/voices
       DEMUCS_DEVICE: ${DEMUCS_DEVICE:-cuda}
       COSYVOICE_MODEL_DIR: ${COSYVOICE_MODEL_DIR:-/app/models/CosyVoice-300M}
+      COSYVOICE_FP16: ${COSYVOICE_FP16:-true}
+      COSYVOICE_LOAD_JIT: ${COSYVOICE_LOAD_JIT:-true}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     deploy:
